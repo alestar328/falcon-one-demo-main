@@ -112,11 +112,27 @@ class CallService extends GetxService {
   int? _locationStreamId;
   int? _currentUid;
 
+  // UID fijo de la bodycam en Agora — se activa cuando el dispositivo emite video
+  static const int bodyCamAgoraUid = 9001;
+  final Rxn<int> _bodyCamVideoUid = Rxn<int>();
+
   bool get isInitialized => _isInitialized;
   bool get hasJoinedChannel => _hasJoined.value;
   bool get isMicrophoneMuted => _isMicrophoneMuted.value;
   bool get isSpeakerMuted => _isSpeakerMuted.value;
   int? get currentUid => _currentUid;
+  bool get bodyCamVideoActive => _bodyCamVideoUid.value != null;
+
+  void setBodyCamVideoActive(bool active) {
+    _bodyCamVideoUid.value = active ? bodyCamAgoraUid : null;
+    final engine = _engine;
+    if (active && engine != null) {
+      // Force subscription — autoSubscribeVideo may not trigger for existing hosts
+      engine.muteRemoteVideoStream(uid: bodyCamAgoraUid, mute: false).catchError(
+        (dynamic e) => debugPrint('CallService: video subscribe error: $e'),
+      );
+    }
+  }
 
   RxBool get hasJoinedRx => _hasJoined;
   RxBool get microphoneMutedRx => _isMicrophoneMuted;
@@ -124,6 +140,7 @@ class CallService extends GetxService {
   RxMap<int, ParticipantLocation> get remoteLocationsRx => _remoteLocations;
   Rxn<ParticipantLocation> get localLocationRx => _localLocation;
   RxInt get satelliteCountRx => _satelliteCount;
+  Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
 
   AgoraCallConfig get config => _config;
 
@@ -168,15 +185,27 @@ class CallService extends GetxService {
           );
         },
         onUserJoined: (connection, remoteUid, elapsed) {
-          debugPrint(
-            'CallService: remote user $remoteUid joined ${connection.channelId} after $elapsed ms',
-          );
+          debugPrint('CallService: remote user $remoteUid joined ${connection.channelId}');
+          if (remoteUid == bodyCamAgoraUid) {
+            _bodyCamVideoUid.value = remoteUid;
+            debugPrint('CallService: bodycam detected → activating video uid=$remoteUid');
+          }
         },
         onUserOffline: (connection, remoteUid, reason) {
-          debugPrint(
-            'CallService: remote user $remoteUid left ${connection.channelId} because of $reason',
-          );
+          debugPrint('CallService: remote user $remoteUid left ${connection.channelId}');
           _remoteLocations.remove(remoteUid);
+          if (remoteUid == bodyCamAgoraUid) _bodyCamVideoUid.value = null;
+        },
+        onRemoteVideoStateChanged: (connection, remoteUid, state, reason, elapsed) {
+          debugPrint('CallService: video state uid=$remoteUid state=$state reason=$reason');
+          if (remoteUid != bodyCamAgoraUid) return;
+          if (state == RemoteVideoState.remoteVideoStateDecoding ||
+              state == RemoteVideoState.remoteVideoStateStarting) {
+            _bodyCamVideoUid.value = remoteUid;
+          } else if (state == RemoteVideoState.remoteVideoStateFailed) {
+            _bodyCamVideoUid.value = null;
+          }
+          // STOPPED and FROZEN: don't clear — onUserOffline handles definitive exit
         },
         onLeaveChannel: (connection, stats) {
           _hasJoined.value = false;
@@ -205,6 +234,10 @@ class CallService extends GetxService {
     _isMicrophoneMuted.value = false;
     _isSpeakerMuted.value = false;
 
+    // Enable video module to receive bodycam stream; phone never publishes its own camera.
+    await rtcEngine.enableVideo();
+    await rtcEngine.muteLocalVideoStream(true);
+
     try {
       _locationStreamId = await rtcEngine.createDataStream(
         const DataStreamConfig(syncWithAudio: false, ordered: true),
@@ -215,14 +248,16 @@ class CallService extends GetxService {
     }
 
     await rtcEngine.joinChannel(
-      token: _config.token ?? '',
+      token: '',  // bodycam joins with null — both must use no-auth mode
       channelId: _config.channelId,
       uid: _config.localUid,
       options: const ChannelMediaOptions(
-        channelProfile: ChannelProfileType.channelProfileCommunication,
+        channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
         publishMicrophoneTrack: true,
+        publishCameraTrack: false,
         autoSubscribeAudio: true,
+        autoSubscribeVideo: true,
       ),
     );
 

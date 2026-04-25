@@ -81,6 +81,7 @@ class MapController extends GetxController {
   final _bodyCam = BodyCamService();
   final RxString bodyCamState = 'disconnected'.obs;
   final RxBool isRecording = false.obs;
+  final RxBool isStreaming = false.obs;
   final RxBool bodyCamWifi = false.obs;
   final RxBool bodyCamApi = false.obs;
   StreamSubscription? _bodyCamSub;
@@ -120,6 +121,27 @@ class MapController extends GetxController {
   Future<void> takePhoto() async {
     if (_bodyCam.state != BtState.connected) return;
     await _bodyCam.takePhoto();
+  }
+
+  Future<void> startStream() async {
+    if (_bodyCam.state != BtState.connected) return;
+    isStreaming.value = true;
+    await _bodyCam.startStream();
+  }
+
+  Future<void> stopStream() async {
+    if (_bodyCam.state != BtState.connected) return;
+    isStreaming.value = false;
+    _ensureCallService()?.setBodyCamVideoActive(false);
+    await _bodyCam.stopStream();
+  }
+
+  Future<void> toggleStream() async {
+    if (isStreaming.value) {
+      await stopStream();
+    } else {
+      await startStream();
+    }
   }
 
   Future<void> toggleBodyCam() async {
@@ -175,6 +197,13 @@ class MapController extends GetxController {
 
         final apiMatch = RegExp(r'"api":(true|false)').firstMatch(data);
         if (apiMatch != null) bodyCamApi.value = apiMatch.group(1) == 'true';
+
+        final streamMatch = RegExp(r'"streaming":(true|false)').firstMatch(data);
+        if (streamMatch != null) {
+          final streaming = streamMatch.group(1) == 'true';
+          isStreaming.value = streaming;
+          _ensureCallService()?.setBodyCamVideoActive(streaming);
+        }
       } catch (_) {}
     }
   }

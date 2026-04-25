@@ -1,5 +1,6 @@
 import 'package:falcon_one_demo/components/panel_button.dart';
 import 'package:falcon_one_demo/controllers/map_controller.dart';
+import 'package:falcon_one_demo/widgets/bodycam_stream_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_liquid_glass/liquid_glass.dart';
 import 'package:get/get.dart';
@@ -21,7 +22,7 @@ class MapView extends GetView<MapController> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(children: [_buildMap(), _buildTopBar(), _buildButtonPanel()]),
+      body: Stack(children: [_buildMap(), _buildStreamOverlay(), /* _buildTopBar(), */ _buildButtonPanel()]),
     );
   }
 
@@ -36,6 +37,52 @@ class MapView extends GetView<MapController> {
         padding: MbxEdgeInsets(bottom: 200.0, top: 0.0, left: 0.0, right: 0.0),
       ),
     );
+  }
+
+  Widget _buildStreamOverlay() {
+    return Obx(() {
+      final streaming = controller.isStreaming.value;
+      if (!streaming) return const SizedBox.shrink();
+      return Positioned(
+        top: 0,
+        left: 20.0,
+        right: 20.0,
+        child: LiquidGlassContainer(
+          config: glassConfig,
+          child: SafeArea(
+            minimum: const EdgeInsets.only(top: 10.0),
+            child: SizedBox(
+              height: 220,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  const BodyCamStreamWidget(borderRadius: 20),
+                  Positioned(
+                    top: 8,
+                    left: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.circle, color: Colors.white, size: 8),
+                          SizedBox(width: 4),
+                          Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   Widget _buildTopBar() {
@@ -93,6 +140,7 @@ class MapView extends GetView<MapController> {
                     child: Obx(() {
                       final state = controller.bodyCamState.value;
                       final recording = controller.isRecording.value;
+                      final streaming = controller.isStreaming.value;
                       final connected = state == 'connected';
                       return Row(
                         children: [
@@ -116,6 +164,19 @@ class MapView extends GetView<MapController> {
                               onTap: connected ? controller.takePhoto : null,
                             ),
                           ),
+                          Expanded(
+                            child: PanelButton(
+                              iconData: streaming
+                                  ? Icons.sensors
+                                  : Icons.sensors_off,
+                              iconColor: streaming
+                                  ? Colors.red
+                                  : connected
+                                      ? Colors.white
+                                      : Colors.white38,
+                              onTap: controller.toggleStream,
+                            ),
+                          ),
                         ],
                       );
                     }),
@@ -124,15 +185,21 @@ class MapView extends GetView<MapController> {
               ),
             ),
             Expanded(
-              child: Obx(
-                () => PanelButton(
-                  iconData: controller.isMicrophoneMuted.value
-                      ? Icons.mic_off
-                      : Icons.mic,
-                  iconSize: 20.0,
-                  onTap: () async {
-                    await controller.toggleMicrophoneMute();
-                  },
+              child: Align(
+                alignment: Alignment.center,
+                child: FractionallySizedBox(
+                  heightFactor: 0.5,
+                  child: Obx(
+                    () => PanelButton(
+                      iconData: controller.isMicrophoneMuted.value
+                          ? Icons.mic_off
+                          : Icons.mic,
+                      iconSize: 20.0,
+                      onTap: () async {
+                        await controller.toggleMicrophoneMute();
+                      },
+                    ),
+                  ),
                 ),
               ),
             ),

@@ -18,7 +18,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 const String _agoraAppId = String.fromEnvironment(
   'AGORA_APP_ID',
-  defaultValue: '20f398f58c6541d881d050d4b6955d9b',
+  defaultValue: 'ff51540c357447f7bf060b3150bf6a3e',
 );
 const String _agoraChannelId = String.fromEnvironment(
   'AGORA_CHANNEL',

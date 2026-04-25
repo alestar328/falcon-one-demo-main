@@ -70,7 +70,9 @@
       "Bash(cp C:/Users/newge/Desktop/BodyCam/falcionone_remote/lib/models/upload_result.dart C:/Users/newge/Desktop/BodyCam/Falcon-One-Demo-main/Falcon-One-Demo-main/lib/models/upload_result.dart)",
       "Bash(cp C:/Users/newge/Desktop/BodyCam/falcionone_remote/lib/models/w1_recording.dart C:/Users/newge/Desktop/BodyCam/Falcon-One-Demo-main/Falcon-One-Demo-main/lib/models/w1_recording.dart)",
       "Bash(cp C:/Users/newge/Desktop/BodyCam/falcionone_remote/lib/screens/main_screen.dart C:/Users/newge/Desktop/BodyCam/Falcon-One-Demo-main/Falcon-One-Demo-main/lib/screens/main_screen.dart)",
-      "Bash(flutter pub *)"
+      "Bash(flutter pub *)",
+      "Bash(git fetch *)",
+      "WebSearch"
     ]
   }
 }

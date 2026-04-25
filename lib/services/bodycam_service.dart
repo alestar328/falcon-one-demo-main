@@ -64,6 +64,14 @@ class BodyCamService {
     return await _method.invokeMethod<bool>('sendRaw', {'data': data}) ?? false;
   }
 
+  Future<bool> startStream() async {
+    return await _method.invokeMethod<bool>('sendRaw', {'data': 'STREAM_START\n'}) ?? false;
+  }
+
+  Future<bool> stopStream() async {
+    return await _method.invokeMethod<bool>('sendRaw', {'data': 'STREAM_STOP\n'}) ?? false;
+  }
+
   Future<Map<String, dynamic>> getBodycamInfo() async {
     final result = await _method.invokeMapMethod<String, dynamic>('getBodycamInfo');
     return result ?? {};
