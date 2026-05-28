@@ -1,8 +1,11 @@
 import 'package:falcon_one_demo/components/panel_button.dart';
+import 'package:falcon_one_demo/controllers/glasses_controller.dart';
 import 'package:falcon_one_demo/controllers/map_controller.dart';
 import 'package:falcon_one_demo/widgets/bodycam_stream_widget.dart';
+import 'package:falcon_one_demo/widgets/glasses_status_banner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_liquid_glass/liquid_glass.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
@@ -22,7 +25,11 @@ class MapView extends GetView<MapController> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(children: [_buildMap(), _buildStreamOverlay(), /* _buildTopBar(), */ _buildButtonPanel()]),
+      body: Stack(children: [
+        _buildMap(),
+        _buildStreamOverlay(),
+        _buildButtonPanel(),
+      ]),
     );
   }
 
@@ -61,7 +68,8 @@ class MapView extends GetView<MapController> {
                     top: 8,
                     left: 10,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(4),
@@ -71,7 +79,11 @@ class MapView extends GetView<MapController> {
                         children: [
                           Icon(Icons.circle, color: Colors.white, size: 8),
                           SizedBox(width: 4),
-                          Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                          Text('LIVE',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
@@ -85,30 +97,9 @@ class MapView extends GetView<MapController> {
     });
   }
 
-  Widget _buildTopBar() {
-    return Positioned(
-      top: 0,
-      left: 20.0,
-      right: 20.0,
-      child: LiquidGlassContainer(
-        config: glassConfig,
-        child: SafeArea(
-          minimum: EdgeInsets.only(top: 10.0),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Image.asset('assets/images/aeria-logo.png', height: 30.0),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildButtonPanel() {
+    final glasses = Get.find<GlassesController>();
+
     return Positioned(
       bottom: 20.0,
       left: 20.0,
@@ -120,30 +111,42 @@ class MapView extends GetView<MapController> {
         child: Row(
           spacing: 10.0,
           children: [
+            // ── Left column: audio+bodycam row / photo+stream+glasses row ──
             Expanded(
-              child: Column(
-                spacing: 10.0,
-                children: [
-                  Expanded(
-                    child: Obx(
-                      () => PanelButton(
-                        iconData: controller.isSpeakerMuted.value
-                            ? Icons.volume_off
-                            : Icons.volume_up,
-                        onTap: () async {
-                          await controller.toggleSpeakerMute();
-                        },
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Obx(() {
-                      final state = controller.bodyCamState.value;
-                      final recording = controller.isRecording.value;
-                      final streaming = controller.isStreaming.value;
-                      final connected = state == 'connected';
-                      return Row(
+              child: Obx(() {
+                final state     = controller.bodyCamState.value;
+                final recording = controller.isRecording.value;
+                final streaming = controller.isStreaming.value;
+                final connected = state == 'connected';
+
+                final glassesConnected = glasses.isConnected.value;
+                final glassesRecording = glasses.isRecording.value;
+                final glassesScanning  = glasses.isScanning.value;
+
+                return Column(
+                  spacing: 8.0,
+                  children: [
+                    // Row 1: speaker | mic | bodycam
+                    Expanded(
+                      child: Row(
+                        spacing: 8.0,
                         children: [
+                          Expanded(
+                            child: Obx(() => PanelButton(
+                              iconData: controller.isSpeakerMuted.value
+                                  ? Icons.volume_off
+                                  : Icons.volume_up,
+                              onTap: () async => controller.toggleSpeakerMute(),
+                            )),
+                          ),
+                          Expanded(
+                            child: Obx(() => PanelButton(
+                              iconData: controller.isMicrophoneMuted.value
+                                  ? Icons.mic_off
+                                  : Icons.mic,
+                              onTap: () async => controller.toggleMicrophoneMute(),
+                            )),
+                          ),
                           Expanded(
                             child: PanelButton(
                               iconData: recording
@@ -157,6 +160,14 @@ class MapView extends GetView<MapController> {
                               onTap: controller.toggleBodyCam,
                             ),
                           ),
+                        ],
+                      ),
+                    ),
+                    // Row 2: photo | livestream | glasses
+                    Expanded(
+                      child: Row(
+                        spacing: 8.0,
+                        children: [
                           Expanded(
                             child: PanelButton(
                               iconData: Icons.camera_alt,
@@ -177,70 +188,67 @@ class MapView extends GetView<MapController> {
                               onTap: controller.toggleStream,
                             ),
                           ),
+                          Expanded(
+                            child: PanelButton(
+                              iconData: glassesScanning
+                                  ? Icons.search
+                                  : FontAwesomeIcons.glasses,
+                              iconColor: glassesRecording
+                                  ? Colors.red
+                                  : glassesConnected
+                                      ? Colors.white
+                                      : Colors.white38,
+                              onTap: glasses.onGlassesButtonTapped,
+                            ),
+                          ),
                         ],
-                      );
-                    }),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Align(
-                alignment: Alignment.center,
-                child: FractionallySizedBox(
-                  heightFactor: 0.5,
-                  child: Obx(
-                    () => PanelButton(
-                      iconData: controller.isMicrophoneMuted.value
-                          ? Icons.mic_off
-                          : Icons.mic,
-                      iconSize: 20.0,
-                      onTap: () async {
-                        await controller.toggleMicrophoneMute();
-                      },
+                      ),
                     ),
-                  ),
-                ),
-              ),
+                  ],
+                );
+              }),
             ),
+            // ── Right column: status info + glasses banner ────────────────
             Expanded(
               child: Padding(
-                padding: EdgeInsets.only(left: 10.0),
+                padding: const EdgeInsets.only(left: 10.0),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  spacing: 20.0,
+                  spacing: 8.0,
                   children: [
                     Row(
                       spacing: 10.0,
                       children: [
-                        Icon(Icons.battery_3_bar),
-                        Obx(() => Text("${controller.batteryLevel.value}%")),
+                        const Icon(Icons.battery_3_bar),
+                        Obx(() =>
+                            Text("${controller.batteryLevel.value}%")),
                       ],
                     ),
                     Row(
                       spacing: 10.0,
                       children: [
-                        Icon(Icons.people),
-                        Obx(() => Text(controller.numUsers.value.toString())),
+                        const Icon(Icons.people),
+                        Obx(() => Text(
+                            controller.numUsers.value.toString())),
                       ],
                     ),
                     Row(
                       spacing: 10.0,
                       children: [
-                        Icon(Icons.signal_wifi_4_bar),
+                        const Icon(Icons.signal_wifi_4_bar),
                         Obx(() => Text(controller.signalStatus.value)),
                       ],
                     ),
                     Row(
                       spacing: 10.0,
                       children: [
-                        Icon(Icons.satellite_alt),
-                        Obx(
-                          () => Text(controller.numSatellites.value.toString()),
-                        ),
+                        const Icon(Icons.satellite_alt),
+                        Obx(() => Text(
+                            controller.numSatellites.value.toString())),
                       ],
                     ),
+                    const GlassesStatusBanner(),
                   ],
                 ),
               ),

@@ -11,6 +11,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
 
     private lateinit var bodyCamChannel: BodyCamChannel
+    private lateinit var glassesChannel: GlassesChannel
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -22,6 +23,14 @@ class MainActivity : FlutterActivity() {
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(bodyCamChannel)
+
+        glassesChannel = GlassesChannel(applicationContext)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.falconone/glasses")
+            .setMethodCallHandler(glassesChannel)
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "com.falconone/glasses_events")
+            .setStreamHandler(glassesChannel)
 
         requestBluetoothPermissions()
     }

@@ -105,6 +105,7 @@ class CallService extends GetxService {
       <int, ParticipantLocation>{}.obs;
   final Rxn<ParticipantLocation> _localLocation = Rxn<ParticipantLocation>();
   final RxInt _satelliteCount = 0.obs;
+  final RxInt _connectedUsersCount = 0.obs;
 
   RtcEngine? _engine;
   bool _isInitialized = false;
@@ -140,6 +141,7 @@ class CallService extends GetxService {
   RxMap<int, ParticipantLocation> get remoteLocationsRx => _remoteLocations;
   Rxn<ParticipantLocation> get localLocationRx => _localLocation;
   RxInt get satelliteCountRx => _satelliteCount;
+  RxInt get connectedUsersCountRx => _connectedUsersCount;
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
 
   AgoraCallConfig get config => _config;
@@ -168,6 +170,7 @@ class CallService extends GetxService {
         onJoinChannelSuccess: (connection, elapsed) {
           _hasJoined.value = true;
           _currentUid = connection.localUid;
+          _connectedUsersCount.value = 1;
           final currentLocal = _localLocation.value;
           if (currentLocal != null && currentLocal.uid != _currentUid) {
             _localLocation.value = currentLocal.copyWith(
@@ -185,6 +188,7 @@ class CallService extends GetxService {
           );
         },
         onUserJoined: (connection, remoteUid, elapsed) {
+          _connectedUsersCount.value++;
           debugPrint('CallService: remote user $remoteUid joined ${connection.channelId}');
           if (remoteUid == bodyCamAgoraUid) {
             _bodyCamVideoUid.value = remoteUid;
@@ -192,6 +196,7 @@ class CallService extends GetxService {
           }
         },
         onUserOffline: (connection, remoteUid, reason) {
+          if (_connectedUsersCount.value > 1) _connectedUsersCount.value--;
           debugPrint('CallService: remote user $remoteUid left ${connection.channelId}');
           _remoteLocations.remove(remoteUid);
           if (remoteUid == bodyCamAgoraUid) _bodyCamVideoUid.value = null;
@@ -209,6 +214,7 @@ class CallService extends GetxService {
         },
         onLeaveChannel: (connection, stats) {
           _hasJoined.value = false;
+          _connectedUsersCount.value = 0;
           _remoteLocations.clear();
           debugPrint('CallService: left channel ${connection.channelId}');
           unawaited(CallForegroundTaskManager.stop());
@@ -218,6 +224,7 @@ class CallService extends GetxService {
         },
         onStreamMessage:
             (connection, remoteUid, streamId, data, length, sentTs) {
+              debugPrint('CallService[GPS-DBG]: onStreamMessage from uid=$remoteUid length=$length');
               _handleIncomingStreamMessage(remoteUid, data, length);
             },
         onStreamMessageError:
@@ -229,9 +236,12 @@ class CallService extends GetxService {
       ),
     );
 
+    // Phone is receive-only: enable audio module for playback but permanently
+    // block the local mic. Only the bodycam (UID 9001) ever publishes audio.
     await rtcEngine.enableAudio();
+    await rtcEngine.muteLocalAudioStream(true);
     await rtcEngine.setDefaultAudioRouteToSpeakerphone(true);
-    _isMicrophoneMuted.value = false;
+    _isMicrophoneMuted.value = true;
     _isSpeakerMuted.value = false;
 
     // Enable video module to receive bodycam stream; phone never publishes its own camera.
@@ -254,7 +264,7 @@ class CallService extends GetxService {
       options: const ChannelMediaOptions(
         channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
-        publishMicrophoneTrack: true,
+        publishMicrophoneTrack: false,  // muted until user enables mic
         publishCameraTrack: false,
         autoSubscribeAudio: true,
         autoSubscribeVideo: true,
@@ -274,9 +284,11 @@ class CallService extends GetxService {
       throw StateError('CallService microphone toggle attempted before init');
     }
 
-    await rtcEngine.muteLocalAudioStream(muted);
+    // Phone is receive-only — mute/unmute controls the remote audio subscription,
+    // never the local mic (which is permanently blocked).
+    await rtcEngine.muteAllRemoteAudioStreams(muted);
     _isMicrophoneMuted.value = muted;
-    debugPrint('CallService microphone muted set to $muted');
+    debugPrint('CallService remote audio muted set to $muted');
   }
 
   /// Toggles the device speakerphone route and updates the mute observable.
@@ -499,17 +511,20 @@ class CallService extends GetxService {
       final decoded = jsonDecode(utf8.decode(payloadBytes));
 
       if (decoded is! Map) {
+        debugPrint('CallService[GPS-DBG]: non-map payload from $remoteUid');
         return;
       }
 
       final message = Map<String, dynamic>.from(decoded);
       if (message['type'] != 'location') {
+        debugPrint('CallService[GPS-DBG]: unknown type "${message['type']}" from $remoteUid');
         return;
       }
 
       final location = ParticipantLocation.fromJson(
         message,
       ).copyWith(uid: remoteUid);
+      debugPrint('CallService[GPS-DBG]: stored location uid=$remoteUid lat=${location.latitude} lng=${location.longitude}');
       _remoteLocations[remoteUid] = location;
     } catch (error, stackTrace) {
       debugPrint(
@@ -571,6 +586,7 @@ class CallService extends GetxService {
     _remoteLocations.clear();
     _localLocation.value = null;
     _satelliteCount.value = 0;
+    _connectedUsersCount.value = 0;
     await _stopLocationUpdates();
     await CallForegroundTaskManager.stop();
   }

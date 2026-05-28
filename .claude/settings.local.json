@@ -72,7 +72,19 @@
       "Bash(cp C:/Users/newge/Desktop/BodyCam/falcionone_remote/lib/screens/main_screen.dart C:/Users/newge/Desktop/BodyCam/Falcon-One-Demo-main/Falcon-One-Demo-main/lib/screens/main_screen.dart)",
       "Bash(flutter pub *)",
       "Bash(git fetch *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git ls-tree *)",
+      "Bash(unzip *)",
+      "Bash(./jadx/bin/jadx Falconlibrary-release/bleequplibrary-release.aar -d Falconlibrary-release/aar_src)",
+      "Bash(dart analyze *)",
+      "Bash(git *)",
+      "Bash(flutter analyze *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(flutter pub *)"
     ]
   }
 }

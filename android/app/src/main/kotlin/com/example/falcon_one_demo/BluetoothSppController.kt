@@ -114,8 +114,12 @@ class BluetoothSppController(private val context: Context) {
             device.createInsecureRfcommSocketToServiceRecord(FALCON_UUID)
         } catch (e: Exception) {
             Log.w(TAG, "SDP failed, fallback to channel 1: ${e.message}")
-            val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
-            m.invoke(device, 1) as BluetoothSocket
+            try {
+                val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
+                m.invoke(device, 1) as BluetoothSocket
+            } catch (ite: java.lang.reflect.InvocationTargetException) {
+                throw IOException("createInsecureRfcommSocket failed: ${ite.cause?.message}", ite.cause)
+            }
         }
     }
 

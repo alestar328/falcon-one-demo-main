@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:falcon_one_demo/app_ui_keys.dart';
 import 'package:falcon_one_demo/data/call_service.dart';
+import 'package:falcon_one_demo/services/agora_launcher.dart';
 import 'package:falcon_one_demo/models/w1_recording.dart';
 import 'package:falcon_one_demo/services/bodycam_service.dart';
 import 'package:falcon_one_demo/services/upload_service.dart';
@@ -22,7 +25,7 @@ enum IncidentUploadUiPhase {
   error,
 }
 
-class MapController extends GetxController {
+class MapController extends GetxController with WidgetsBindingObserver {
   MapboxMap? mapboxMap;
 
   CallService? _callService;
@@ -31,7 +34,13 @@ class MapController extends GetxController {
   Worker? _remoteLocationsWorker;
   Worker? _localLocationWorker;
   Worker? _satelliteCountWorker;
+  Worker? _connectedUsersWorker;
   bool _incidentGpsCameraApplied = false;
+
+  PointAnnotationManager? _circleAnnotationManager;
+  final Map<int, PointAnnotation> _userAnnotations = <int, PointAnnotation>{};
+  bool _hasPositionedInitialCamera = false;
+  Uint8List? _agentDotPng;
 
   final RxBool hasCallTelemetry = false.obs;
 
@@ -124,16 +133,74 @@ class MapController extends GetxController {
   }
 
   Future<void> startStream() async {
-    if (_bodyCam.state != BtState.connected) return;
+    final ok = await ensureAgoraStarted();
+    if (!ok) {
+      debugPrint('startStream: Agora failed to start — stream aborted');
+      return;
+    }
     isStreaming.value = true;
-    await _bodyCam.startStream();
+    if (_bodyCam.state == BtState.connected) {
+      await _bodyCam.startStream();
+    }
   }
 
   Future<void> stopStream() async {
-    if (_bodyCam.state != BtState.connected) return;
     isStreaming.value = false;
     _ensureCallService()?.setBodyCamVideoActive(false);
-    await _bodyCam.stopStream();
+    if (_bodyCam.state == BtState.connected) {
+      await _bodyCam.stopStream();
+    }
+    // Agora stays alive for GPS sharing — only shut down on background/close
+  }
+
+  Future<void> _shutdownAgora() async {
+    if (!Get.isRegistered<CallService>()) {
+      _callService = null;
+      return;
+    }
+    try {
+      await Get.find<CallService>().shutdown();
+    } catch (e) {
+      debugPrint('_shutdownAgora: $e');
+    } finally {
+      await Get.delete<CallService>(force: true);
+    }
+    _callService = null;
+    _remoteLocationsWorker?.dispose();
+    _remoteLocationsWorker = null;
+    _localLocationWorker?.dispose();
+    _localLocationWorker = null;
+    _satelliteCountWorker?.dispose();
+    _satelliteCountWorker = null;
+    _connectedUsersWorker?.dispose();
+    _connectedUsersWorker = null;
+    hasCallTelemetry.value = false;
+    numUsers.value = 0;
+    numSatellites.value = 0;
+    final manager = _circleAnnotationManager;
+    if (manager != null) {
+      unawaited(manager.deleteAll().catchError((_) {}));
+      _userAnnotations.clear();
+    }
+  }
+
+  Future<void> _autoStartAgora() async {
+    final ok = await ensureAgoraStarted();
+    if (!ok) {
+      debugPrint('MapController: auto Agora start failed');
+      return;
+    }
+    _ensureCallService();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached ||
+        state == AppLifecycleState.paused) {
+      unawaited(_shutdownAgora());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_autoStartAgora());
+    }
   }
 
   Future<void> toggleStream() async {
@@ -184,6 +251,25 @@ class MapController extends GetxController {
   }
 
   void _onBodyCamData(String data) {
+    // Physical button push-notifications
+    if (data.contains('BTN_REC_START')) {
+      isRecording.value = true;
+      return;
+    }
+    if (data.contains('BTN_REC_STOP')) {
+      isRecording.value = false;
+      return;
+    }
+    if (data.contains('BTN_STREAM_START')) {
+      unawaited(_onBodyCamStreamStarted());
+      return;
+    }
+    if (data.contains('BTN_STREAM_STOP')) {
+      unawaited(_onBodyCamStreamStopped());
+      return;
+    }
+
+    // STATUS JSON polling response
     if (data.contains('"battery"') || data.contains('"recording"')) {
       try {
         final batMatch = RegExp(r'"battery":(\d+)').firstMatch(data);
@@ -201,11 +287,28 @@ class MapController extends GetxController {
         final streamMatch = RegExp(r'"streaming":(true|false)').firstMatch(data);
         if (streamMatch != null) {
           final streaming = streamMatch.group(1) == 'true';
-          isStreaming.value = streaming;
-          _ensureCallService()?.setBodyCamVideoActive(streaming);
+          if (streaming && !isStreaming.value) {
+            unawaited(_onBodyCamStreamStarted());
+          } else if (!streaming && isStreaming.value) {
+            unawaited(_onBodyCamStreamStopped());
+          }
         }
       } catch (_) {}
     }
+  }
+
+  // Bodycam started stream via physical button — sync phone Agora (subscribe only)
+  Future<void> _onBodyCamStreamStarted() async {
+    final ok = await ensureAgoraStarted();
+    if (!ok) return;
+    isStreaming.value = true;
+    _ensureCallService()?.setBodyCamVideoActive(true);
+  }
+
+  // Bodycam stopped stream via physical button — clear video overlay only
+  Future<void> _onBodyCamStreamStopped() async {
+    isStreaming.value = false;
+    _ensureCallService()?.setBodyCamVideoActive(false);
   }
 
   // ── W1 HTTP methods ───────────────────────────────────────────────────────
@@ -391,7 +494,18 @@ class MapController extends GetxController {
     mapboxMap!.logo.updateSettings(LogoSettings(enabled: false));
     mapboxMap!.attribution.updateSettings(AttributionSettings(enabled: false));
     mapboxMap!.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
+    unawaited(
+      map.annotations.createPointAnnotationManager().then((manager) {
+        _circleAnnotationManager = manager;
+        unawaited(_refreshParticipantAnnotations());
+      }),
+    );
     unawaited(_applyIncidentGpsToMap());
+    final service = _callService;
+    if (service != null) {
+      final local = service.localLocationRx.value;
+      if (local != null) unawaited(_positionCameraOver(local));
+    }
   }
 
   void _safeSnackBar(
@@ -630,6 +744,7 @@ class MapController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    WidgetsBinding.instance.addObserver(this);
     final service = _ensureCallService();
     if (service != null) {
       hasCallTelemetry.value = true;
@@ -653,6 +768,9 @@ class MapController extends GetxController {
     });
     _bodyCamDataSub = _bodyCam.dataStream.listen(_onBodyCamData);
 
+    // Auto-start Agora for real-time GPS sharing between agents
+    unawaited(_autoStartAgora());
+
     // GPS + HTTP polling
     unawaited(_loadIncidentGps());
     _w1StatusPollTimer?.cancel();
@@ -664,6 +782,8 @@ class MapController extends GetxController {
 
   @override
   void onClose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_shutdownAgora());
     _bodyCamSub?.cancel();
     _bodyCamDataSub?.cancel();
     _statusPollTimer?.cancel();
@@ -673,6 +793,7 @@ class MapController extends GetxController {
     _remoteLocationsWorker?.dispose();
     _localLocationWorker?.dispose();
     _satelliteCountWorker?.dispose();
+    _connectedUsersWorker?.dispose();
     _gpsPositionSubscription?.cancel();
     _gpsPositionSubscription = null;
     super.onClose();
@@ -725,31 +846,156 @@ class MapController extends GetxController {
   void _attachCallService(CallService service) {
     _remoteLocationsWorker ??= ever<Map<int, ParticipantLocation>>(
       service.remoteLocationsRx,
-      (_) => _updateParticipantCount(),
+      (_) => unawaited(_refreshParticipantAnnotations()),
     );
 
     _localLocationWorker ??= ever<ParticipantLocation?>(
       service.localLocationRx,
-      (_) => _updateParticipantCount(),
+      (location) {
+        if (location != null) unawaited(_positionCameraOver(location));
+        unawaited(_refreshParticipantAnnotations());
+      },
     );
 
     numSatellites.value = service.satelliteCountRx.value;
     _satelliteCountWorker ??= ever<int>(service.satelliteCountRx, (count) {
       numSatellites.value = count;
     });
-    _updateParticipantCount();
+
+    numUsers.value = service.connectedUsersCountRx.value;
+    _connectedUsersWorker ??= ever<int>(service.connectedUsersCountRx, (count) {
+      numUsers.value = count;
+    });
   }
 
-  void _updateParticipantCount() {
+  Future<Uint8List> _buildAgentDotPng() async {
+    const int sz = 44;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      Rect.fromLTWH(0, 0, sz.toDouble(), sz.toDouble()),
+    );
+    // White halo
+    canvas.drawCircle(
+      const Offset(sz / 2, sz / 2),
+      sz / 2 - 1,
+      Paint()..color = Colors.white,
+    );
+    // Yellow fill
+    canvas.drawCircle(
+      const Offset(sz / 2, sz / 2),
+      sz / 2 - 6,
+      Paint()..color = const Color(0xFFFFD700),
+    );
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(sz, sz);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<void> _refreshParticipantAnnotations() async {
+    final manager = _circleAnnotationManager;
+    if (manager == null) return;
+
     final service = _callService;
-    if (service == null) {
-      numUsers.value = 0;
-      return;
+
+    final Map<int, ParticipantLocation> desired = <int, ParticipantLocation>{};
+    if (service != null) {
+      desired.addAll(service.remoteLocationsRx);
+      final local = service.localLocationRx.value;
+      if (local != null) desired[local.uid] = local;
     }
-    final Map<int, ParticipantLocation> desired =
-        <int, ParticipantLocation>{}..addAll(service.remoteLocationsRx);
-    final ParticipantLocation? local = service.localLocationRx.value;
-    if (local != null) desired[local.uid] = local;
-    numUsers.value = desired.length;
+
+    // Remove markers for users who have left
+    final staleUids =
+        _userAnnotations.keys.where((uid) => !desired.containsKey(uid)).toList();
+    for (final uid in staleUids) {
+      final annotation = _userAnnotations.remove(uid);
+      if (annotation != null) {
+        try {
+          await manager.delete(annotation);
+        } catch (e) {
+          debugPrint('_refreshParticipantAnnotations: delete error $e');
+        }
+      }
+    }
+
+    final localUid = service?.localLocationRx.value?.uid;
+
+    // Lazy-build the agent dot PNG once
+    _agentDotPng ??= await _buildAgentDotPng();
+    final dotPng = _agentDotPng!;
+
+    for (final entry in desired.entries) {
+      final uid = entry.key;
+      final location = entry.value;
+
+      // Local user shown by Mapbox native dot — skip
+      if (uid == localUid) continue;
+
+      final point = Point(
+        coordinates: Position(location.longitude, location.latitude),
+      );
+
+      final existing = _userAnnotations[uid];
+      if (existing == null) {
+        try {
+          final annotation = await manager.create(
+            PointAnnotationOptions(
+              geometry: point,
+              image: dotPng,
+              iconAnchor: IconAnchor.CENTER,
+              iconSize: 1.0,
+            ),
+          );
+          _userAnnotations[uid] = annotation;
+        } catch (e) {
+          debugPrint('_refreshParticipantAnnotations: create error $e');
+        }
+      } else {
+        try {
+          existing.geometry = point;
+          await manager.update(existing);
+        } catch (e) {
+          // Annotation cleared by style reload — recreate
+          _userAnnotations.remove(uid);
+          try {
+            final annotation = await manager.create(
+              PointAnnotationOptions(
+                geometry: point,
+                image: dotPng,
+                iconAnchor: IconAnchor.CENTER,
+                iconSize: 1.0,
+              ),
+            );
+            _userAnnotations[uid] = annotation;
+          } catch (e2) {
+            debugPrint('_refreshParticipantAnnotations: recreate error $e2');
+          }
+        }
+      }
+    }
+  }
+
+  Future<void> _positionCameraOver(ParticipantLocation location) async {
+    if (_hasPositionedInitialCamera) return;
+    final map = mapboxMap;
+    if (map == null) return;
+
+    try {
+      await map.setCamera(
+        CameraOptions(
+          center: Point(
+            coordinates: Position(location.longitude, location.latitude),
+          ),
+          zoom: 16.0,
+          pitch: 60.0,
+          padding: MbxEdgeInsets(bottom: 200.0, top: 0.0, left: 0.0, right: 0.0),
+        ),
+      );
+      _hasPositionedInitialCamera = true;
+    } catch (error, stackTrace) {
+      debugPrint('_positionCameraOver: $error\n$stackTrace');
+    }
   }
 }
