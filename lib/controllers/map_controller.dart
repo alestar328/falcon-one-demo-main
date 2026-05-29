@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:falcon_one_demo/app_ui_keys.dart';
 import 'package:falcon_one_demo/data/call_service.dart';
@@ -37,10 +35,14 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Worker? _connectedUsersWorker;
   bool _incidentGpsCameraApplied = false;
 
-  PointAnnotationManager? _circleAnnotationManager;
-  final Map<int, PointAnnotation> _userAnnotations = <int, PointAnnotation>{};
+  static const _kAgentSourceId = 'falcon-remote-agents';
+  static const _kAgentPulseLayerId = 'falcon-agent-pulse';
+  static const _kAgentDotLayerId = 'falcon-agent-dot';
+
   bool _hasPositionedInitialCamera = false;
-  Uint8List? _agentDotPng;
+  bool _agentLayersReady = false;
+  Timer? _pulseTimer;
+  double _pulsePhase = 0.0;
 
   final RxBool hasCallTelemetry = false.obs;
 
@@ -177,11 +179,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
     hasCallTelemetry.value = false;
     numUsers.value = 0;
     numSatellites.value = 0;
-    final manager = _circleAnnotationManager;
-    if (manager != null) {
-      unawaited(manager.deleteAll().catchError((_) {}));
-      _userAnnotations.clear();
-    }
+    _pulseTimer?.cancel();
+    _pulseTimer = null;
   }
 
   Future<void> _autoStartAgora() async {
@@ -191,6 +190,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
       return;
     }
     _ensureCallService();
+    if (_agentLayersReady && _pulseTimer == null) _startPulseAnimation();
   }
 
   @override
@@ -494,12 +494,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
     mapboxMap!.logo.updateSettings(LogoSettings(enabled: false));
     mapboxMap!.attribution.updateSettings(AttributionSettings(enabled: false));
     mapboxMap!.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
-    unawaited(
-      map.annotations.createPointAnnotationManager().then((manager) {
-        _circleAnnotationManager = manager;
-        unawaited(_refreshParticipantAnnotations());
-      }),
-    );
+    unawaited(_setupAgentLayers(map));
     unawaited(_applyIncidentGpsToMap());
     final service = _callService;
     if (service != null) {
@@ -794,6 +789,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _localLocationWorker?.dispose();
     _satelliteCountWorker?.dispose();
     _connectedUsersWorker?.dispose();
+    _pulseTimer?.cancel();
+    _pulseTimer = null;
     _gpsPositionSubscription?.cancel();
     _gpsPositionSubscription = null;
     super.onClose();
@@ -868,112 +865,109 @@ class MapController extends GetxController with WidgetsBindingObserver {
     });
   }
 
-  Future<Uint8List> _buildAgentDotPng() async {
-    const int sz = 44;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(
-      recorder,
-      Rect.fromLTWH(0, 0, sz.toDouble(), sz.toDouble()),
-    );
-    // White halo
-    canvas.drawCircle(
-      const Offset(sz / 2, sz / 2),
-      sz / 2 - 1,
-      Paint()..color = Colors.white,
-    );
-    // Yellow fill
-    canvas.drawCircle(
-      const Offset(sz / 2, sz / 2),
-      sz / 2 - 6,
-      Paint()..color = const Color(0xFFFFD700),
-    );
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(sz, sz);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
+  Future<void> _setupAgentLayers(MapboxMap map) async {
+    _agentLayersReady = false;
+    try {
+      await map.style.addSource(
+        GeoJsonSource(
+          id: _kAgentSourceId,
+          data: '{"type":"FeatureCollection","features":[]}',
+        ),
+      );
+    } catch (_) {}
+
+    // Pulse ring — animates outward and fades
+    try {
+      await map.style.addLayer(
+        CircleLayer(
+          id: _kAgentPulseLayerId,
+          sourceId: _kAgentSourceId,
+          slot: 'top',
+          circleColor: 0xFFFFD700,
+          circleRadius: 8.0,
+          circleOpacity: 0.5,
+          circleStrokeWidth: 0.0,
+          circleEmissiveStrength: 1.0,
+        ),
+      );
+    } catch (_) {}
+
+    // Solid dot with white halo on top
+    try {
+      await map.style.addLayer(
+        CircleLayer(
+          id: _kAgentDotLayerId,
+          sourceId: _kAgentSourceId,
+          slot: 'top',
+          circleColor: 0xFFFFD700,
+          circleRadius: 8.0,
+          circleOpacity: 1.0,
+          circleStrokeColor: 0xFFFFFFFF,
+          circleStrokeWidth: 3.0,
+          circleStrokeOpacity: 1.0,
+          circleEmissiveStrength: 1.0,
+        ),
+      );
+    } catch (_) {}
+
+    _agentLayersReady = true;
+    _startPulseAnimation();
+    unawaited(_refreshParticipantAnnotations());
+  }
+
+  void _startPulseAnimation() {
+    _pulseTimer?.cancel();
+    _pulseTimer = Timer.periodic(const Duration(milliseconds: 40), (_) {
+      _pulsePhase = (_pulsePhase + 0.033) % 1.0;
+      final radius = 8.0 + (_pulsePhase * 20.0);
+      final opacity = (1.0 - _pulsePhase) * 0.55;
+      final map = mapboxMap;
+      if (map == null) return;
+      unawaited(
+        map.style
+            .setStyleLayerProperty(_kAgentPulseLayerId, 'circle-radius', radius)
+            .catchError((_) {}),
+      );
+      unawaited(
+        map.style
+            .setStyleLayerProperty(_kAgentPulseLayerId, 'circle-opacity', opacity)
+            .catchError((_) {}),
+      );
+    });
   }
 
   Future<void> _refreshParticipantAnnotations() async {
-    final manager = _circleAnnotationManager;
-    if (manager == null) return;
+    if (!_agentLayersReady) return;
+    final map = mapboxMap;
+    if (map == null) return;
 
     final service = _callService;
-
-    final Map<int, ParticipantLocation> desired = <int, ParticipantLocation>{};
-    if (service != null) {
-      desired.addAll(service.remoteLocationsRx);
-      final local = service.localLocationRx.value;
-      if (local != null) desired[local.uid] = local;
-    }
-
-    // Remove markers for users who have left
-    final staleUids =
-        _userAnnotations.keys.where((uid) => !desired.containsKey(uid)).toList();
-    for (final uid in staleUids) {
-      final annotation = _userAnnotations.remove(uid);
-      if (annotation != null) {
-        try {
-          await manager.delete(annotation);
-        } catch (e) {
-          debugPrint('_refreshParticipantAnnotations: delete error $e');
-        }
-      }
-    }
-
     final localUid = service?.localLocationRx.value?.uid;
 
-    // Lazy-build the agent dot PNG once
-    _agentDotPng ??= await _buildAgentDotPng();
-    final dotPng = _agentDotPng!;
-
-    for (final entry in desired.entries) {
-      final uid = entry.key;
-      final location = entry.value;
-
-      // Local user shown by Mapbox native dot — skip
-      if (uid == localUid) continue;
-
-      final point = Point(
-        coordinates: Position(location.longitude, location.latitude),
-      );
-
-      final existing = _userAnnotations[uid];
-      if (existing == null) {
-        try {
-          final annotation = await manager.create(
-            PointAnnotationOptions(
-              geometry: point,
-              image: dotPng,
-              iconAnchor: IconAnchor.CENTER,
-              iconSize: 1.0,
-            ),
-          );
-          _userAnnotations[uid] = annotation;
-        } catch (e) {
-          debugPrint('_refreshParticipantAnnotations: create error $e');
-        }
-      } else {
-        try {
-          existing.geometry = point;
-          await manager.update(existing);
-        } catch (e) {
-          // Annotation cleared by style reload — recreate
-          _userAnnotations.remove(uid);
-          try {
-            final annotation = await manager.create(
-              PointAnnotationOptions(
-                geometry: point,
-                image: dotPng,
-                iconAnchor: IconAnchor.CENTER,
-                iconSize: 1.0,
-              ),
-            );
-            _userAnnotations[uid] = annotation;
-          } catch (e2) {
-            debugPrint('_refreshParticipantAnnotations: recreate error $e2');
-          }
-        }
+    final features = <Map<String, dynamic>>[];
+    if (service != null) {
+      for (final entry in service.remoteLocationsRx.entries) {
+        if (entry.key == localUid) continue;
+        features.add(<String, dynamic>{
+          'type': 'Feature',
+          'geometry': <String, dynamic>{
+            'type': 'Point',
+            'coordinates': <double>[entry.value.longitude, entry.value.latitude],
+          },
+          'properties': <String, dynamic>{'uid': entry.key},
+        });
       }
+    }
+
+    final geoJson = jsonEncode(<String, dynamic>{
+      'type': 'FeatureCollection',
+      'features': features,
+    });
+
+    try {
+      await map.style.setStyleSourceProperty(_kAgentSourceId, 'data', geoJson);
+    } catch (e) {
+      debugPrint('_refreshParticipantAnnotations: $e');
     }
   }
 
