@@ -20,8 +20,8 @@ class IncidentUploadStatusPanel extends GetView<MapController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final micOn = controller.isMicOn.value;
-      final speakerOn = controller.isSpeakerOn.value;
+      final micOn = !controller.isMicrophoneMuted.value;
+      final speakerOn = !controller.isSpeakerMuted.value;
       final gpsReady = controller.incidentGpsReady.value;
       final uploading = controller.isUploading.value;
       final phase = controller.uploadUiPhase.value;

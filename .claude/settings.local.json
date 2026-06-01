@@ -84,7 +84,32 @@
       "Bash(git *)",
       "Bash(flutter analyze *)",
       "PowerShell(Get-ChildItem *)",
-      "PowerShell(flutter pub *)"
+      "PowerShell(flutter pub *)",
+      "PowerShell(explorer.exe /select,\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\")",
+      "PowerShell(\\(Get-ChildItem \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\" -Force\\).Name -join \"`n\")",
+      "PowerShell($root=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\src\"; \\(\\(Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue\\).FullName.Replace\\(\"$root\\\\\",\"\"\\)\\) -join \"`n\")",
+      "PowerShell($root=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falconlibrary-release\"; \\(\\(Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 80\\).FullName.Replace\\(\"$root\\\\\",\"\"\\)\\) -join \"`n\")",
+      "PowerShell($d=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\example\\\\bodycamserver\"; \\(Get-ChildItem $d -File\\).Name -join \"`n\")",
+      "PowerShell($d=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\src\\\\main\\\\java\\\\com\\\\example\\\\bodycamserver\"; $f=Get-ChildItem $d -File; \"TOTAL .kt = \"+$f.Count; \"--- \\(resto, despues de los primeros 40\\) ---\"; \\($f.Name | Select-Object -Skip 40\\) -join \"`n\")",
+      "PowerShell(Test-Path *)",
+      "PowerShell(\"=== Falconlibrary-release ===\"; $r=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falconlibrary-release\"; \\(Get-ChildItem $r -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 50\\).FullName.Replace\\(\"$r\\\\\",\"\"\\) -join \"`n\")",
+      "PowerShell($r=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falconlibrary-release\"; \\(Get-ChildItem $r -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 60\\).FullName.Replace\\(\"$r\\\\\",\"\"\\) -join \"`n\")",
+      "PowerShell($f=\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\falcon-release\"; \"Length bytes = \"+\\(Get-Item $f\\).Length; \"--- raw ---\"; [IO.File]::ReadAllText\\($f\\))",
+      "Bash(xxd \"/c/Users/newge/Desktop/BodyCam/falcon-release\")",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\jadx\\\\bin\"; Write-Output \"---JAVA---\"; \\(Get-Command java -ErrorAction SilentlyContinue\\).Source)",
+      "PowerShell(& \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\jadx\\\\bin\\\\jadx.bat\" -d \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\_jadx_out\" --no-res -j 4 \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\MCP_NA20260109_276_ZXA_v286.apk\" 2>&1 | Select-Object -Last 5)",
+      "PowerShell(& \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\jadx\\\\bin\\\\jadx.bat\" --no-src -d \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\_jadx_manifest\" \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\MCP_NA20260109_276_ZXA_v286.apk\" 2>&1 | Select-Object -Last 3)",
+      "PowerShell(& \"C:\\\\platform-tools\\\\adb.exe\" devices)",
+      "PowerShell(& \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\gradlew.bat\" -p \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\" assembleDebug 2>&1 | Select-Object -Last 25)",
+      "PowerShell(git status --short; \"----\"; git log --oneline -8)",
+      "PowerShell($adb = \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\adb.exe\"; if \\(Test-Path $adb\\) { & $adb devices } else { \"no local adb\"; \\(Get-Command adb -ErrorAction SilentlyContinue\\).Source })",
+      "PowerShell($adb = \"C:\\\\platform-tools\\\\adb.exe\"; & $adb devices -l)",
+      "Bash(explorer.exe C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\\\\build\\\\app\\\\outputs\\\\flutter-apk *)",
+      "Bash(sed -n '238,260p' lib/src/core/room.dart)",
+      "Bash(sed -n '1,60p' lib/src/widgets/video_track_renderer.dart)",
+      "Bash(explorer.exe \"C:\\\\Users\\\\newge\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\livekit_client-2.7.0\")",
+      "Bash(exit 0)",
+      "Bash(explorer.exe \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\")"
     ]
   }
 }

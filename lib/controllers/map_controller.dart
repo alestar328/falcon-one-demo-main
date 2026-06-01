@@ -12,7 +12,6 @@ import 'package:falcon_one_demo/services/w1_service.dart';
 import 'package:falcon_one_demo/widgets/w1_recording_import_sheet.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart' as geo;
 import 'package:get/get.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
@@ -33,25 +32,22 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Worker? _localLocationWorker;
   Worker? _satelliteCountWorker;
   Worker? _connectedUsersWorker;
-  bool _incidentGpsCameraApplied = false;
 
   static const _kAgentSourceId = 'falcon-remote-agents';
   static const _kAgentPulseLayerId = 'falcon-agent-pulse';
   static const _kAgentDotLayerId = 'falcon-agent-dot';
+  static const _kAgentLabelLayerId = 'falcon-agent-label';
+
+  // A remote agent is considered to have "lost signal" once we have not
+  // received a data-stream message from it for longer than this. Peers send
+  // every ~1 s (movement) plus a 3 s heartbeat, so 7 s ≈ two missed heartbeats.
+  static const Duration _staleAfter = Duration(seconds: 7);
 
   bool _hasPositionedInitialCamera = false;
   bool _agentLayersReady = false;
   Timer? _pulseTimer;
+  Timer? _staleRefreshTimer;
   double _pulsePhase = 0.0;
-
-  final RxBool hasCallTelemetry = false.obs;
-
-  StreamSubscription<geo.Position>? _gpsPositionSubscription;
-
-  static const String officerCode = 'off-001';
-
-  final RxBool isSpeakerOn = true.obs;
-  final RxBool isMicOn = true.obs;
 
   final RxDouble incidentLatitude = 0.0.obs;
   final RxDouble incidentLongitude = 0.0.obs;
@@ -93,8 +89,6 @@ class MapController extends GetxController with WidgetsBindingObserver {
   final RxString bodyCamState = 'disconnected'.obs;
   final RxBool isRecording = false.obs;
   final RxBool isStreaming = false.obs;
-  final RxBool bodyCamWifi = false.obs;
-  final RxBool bodyCamApi = false.obs;
   StreamSubscription? _bodyCamSub;
   StreamSubscription? _bodyCamDataSub;
   Timer? _statusPollTimer;
@@ -103,22 +97,11 @@ class MapController extends GetxController with WidgetsBindingObserver {
   RxInt batteryLevel = 0.obs;
   RxInt numSatellites = 0.obs;
   RxInt numUsers = 0.obs;
-  RxString signalStatus = 'Good'.obs;
 
   void setW1BaseUrl(String ip, int port) => w1Service.setBaseUrl(ip, port);
 
   double? get lat => incidentGpsReady.value ? incidentLatitude.value : null;
   double? get lng => incidentGpsReady.value ? incidentLongitude.value : null;
-
-  void toggleSpeaker() {
-    isSpeakerOn.toggle();
-    update();
-  }
-
-  void toggleMic() {
-    isMicOn.toggle();
-    update();
-  }
 
   void _resetUploadUiState() {
     uploadUiPhase.value = IncidentUploadUiPhase.idle;
@@ -176,11 +159,12 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _satelliteCountWorker = null;
     _connectedUsersWorker?.dispose();
     _connectedUsersWorker = null;
-    hasCallTelemetry.value = false;
     numUsers.value = 0;
     numSatellites.value = 0;
     _pulseTimer?.cancel();
     _pulseTimer = null;
+    _staleRefreshTimer?.cancel();
+    _staleRefreshTimer = null;
   }
 
   Future<void> _autoStartAgora() async {
@@ -191,14 +175,18 @@ class MapController extends GetxController with WidgetsBindingObserver {
     }
     _ensureCallService();
     if (_agentLayersReady && _pulseTimer == null) _startPulseAnimation();
+    if (_agentLayersReady && _staleRefreshTimer == null) _startStaleRefresh();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.detached ||
-        state == AppLifecycleState.paused) {
+    // Solo liberamos Agora cuando la app se cierra del todo (detached).
+    // Cambiar de app (paused) NO debe cortar la conexión: el servicio en
+    // primer plano (CallForegroundTaskManager) mantiene vivo el GPS sharing.
+    if (state == AppLifecycleState.detached) {
       unawaited(_shutdownAgora());
     } else if (state == AppLifecycleState.resumed) {
+      // Red de seguridad: si Agora se hubiera liberado estando fuera, re-arma.
       unawaited(_autoStartAgora());
     }
   }
@@ -277,12 +265,6 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
         final recMatch = RegExp(r'"recording":(true|false)').firstMatch(data);
         if (recMatch != null) isRecording.value = recMatch.group(1) == 'true';
-
-        final wifiMatch = RegExp(r'"wifi":(true|false)').firstMatch(data);
-        if (wifiMatch != null) bodyCamWifi.value = wifiMatch.group(1) == 'true';
-
-        final apiMatch = RegExp(r'"api":(true|false)').firstMatch(data);
-        if (apiMatch != null) bodyCamApi.value = apiMatch.group(1) == 'true';
 
         final streamMatch = RegExp(r'"streaming":(true|false)').firstMatch(data);
         if (streamMatch != null) {
@@ -488,19 +470,35 @@ class MapController extends GetxController with WidgetsBindingObserver {
   void onMapCreated(MapboxMap map) {
     mapboxMap = map;
     if (mapboxMap == null) return;
-    mapboxMap!.location.updateSettings(
-      LocationComponentSettings(enabled: true, pulsingEnabled: true),
-    );
+    // Chrome settings that don't depend on the style being loaded.
     mapboxMap!.logo.updateSettings(LogoSettings(enabled: false));
     mapboxMap!.attribution.updateSettings(AttributionSettings(enabled: false));
     mapboxMap!.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
-    unawaited(_setupAgentLayers(map));
-    unawaited(_applyIncidentGpsToMap());
+    // Position the camera if a location is already available; otherwise the
+    // CallService location worker positions it on the first fix.
     final service = _callService;
     if (service != null) {
       final local = service.localLocationRx.value;
       if (local != null) unawaited(_positionCameraOver(local));
     }
+  }
+
+  /// Style-dependent setup. MUST run here (not in [onMapCreated]) because the
+  /// remote style URI is often not loaded yet when the map is first created —
+  /// on a cold start that race made `addSource`/`addLayer` silently fail, so
+  /// neither our own location puck nor the remote-agent markers ever appeared
+  /// on the very first app launch. [onStyleLoaded] can fire more than once
+  /// (e.g. a style reload), so every step is idempotent.
+  void onStyleLoaded(StyleLoadedEventData _) {
+    final map = mapboxMap;
+    if (map == null) return;
+    // Our own location puck (native blue dot).
+    unawaited(
+      map.location.updateSettings(
+        LocationComponentSettings(enabled: true, pulsingEnabled: true),
+      ),
+    );
+    unawaited(_setupAgentLayers(map));
   }
 
   void _safeSnackBar(
@@ -662,62 +660,13 @@ class MapController extends GetxController with WidgetsBindingObserver {
     };
   }
 
-  Future<void> _loadIncidentGps() async {
-    try {
-      var perm = await geo.Geolocator.checkPermission();
-      if (perm == geo.LocationPermission.denied) {
-        perm = await geo.Geolocator.requestPermission();
-      }
-      if (perm == geo.LocationPermission.denied || perm == geo.LocationPermission.deniedForever) return;
-      if (!await geo.Geolocator.isLocationServiceEnabled()) return;
-      final pos = await geo.Geolocator.getCurrentPosition();
-      incidentLatitude.value = pos.latitude;
-      incidentLongitude.value = pos.longitude;
-      incidentGpsReady.value = true;
-      update();
-      await _applyIncidentGpsToMap();
-      _startGpsPositionStream();
-    } catch (e, st) {
-      debugPrint('GPS FETCH ERROR: $e\n$st');
-    }
-  }
-
-  void _startGpsPositionStream() {
-    _gpsPositionSubscription?.cancel();
-    _gpsPositionSubscription = geo.Geolocator.getPositionStream(
-      locationSettings: const geo.LocationSettings(
-        accuracy: geo.LocationAccuracy.high,
-        distanceFilter: 10,
-      ),
-    ).listen(
-      (geo.Position pos) {
-        incidentLatitude.value = pos.latitude;
-        incidentLongitude.value = pos.longitude;
-        incidentGpsReady.value = true;
-      },
-      onError: (Object e) => debugPrint('GPS stream: $e'),
-    );
-  }
-
-  Future<void> _applyIncidentGpsToMap() async {
-    if (_incidentGpsCameraApplied || !incidentGpsReady.value) return;
-    final map = mapboxMap;
-    if (map == null) return;
-
-    final cameraOptions = CameraOptions(
-      center: Point(
-        coordinates: Position(incidentLongitude.value, incidentLatitude.value),
-      ),
-      zoom: 16.0,
-      pitch: 60.0,
-      padding: MbxEdgeInsets(bottom: 200.0, top: 0.0, left: 0.0, right: 0.0),
-    );
-    try {
-      await map.setCamera(cameraOptions);
-      _incidentGpsCameraApplied = true;
-    } catch (error, stackTrace) {
-      debugPrint('GPS camera: $error\n$stackTrace');
-    }
+  /// Mirrors the latest shared location into the incident-metadata fields and
+  /// positions the camera. Fed by the [CallService] position stream.
+  void _applyLocalLocation(ParticipantLocation location) {
+    incidentLatitude.value = location.latitude;
+    incidentLongitude.value = location.longitude;
+    incidentGpsReady.value = true;
+    unawaited(_positionCameraOver(location));
   }
 
   // ── Audio / CallService delegation ───────────────────────────────────────
@@ -742,7 +691,6 @@ class MapController extends GetxController with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     final service = _ensureCallService();
     if (service != null) {
-      hasCallTelemetry.value = true;
       _attachCallService(service);
     }
 
@@ -766,8 +714,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
     // Auto-start Agora for real-time GPS sharing between agents
     unawaited(_autoStartAgora());
 
-    // GPS + HTTP polling
-    unawaited(_loadIncidentGps());
+    // W1 HTTP status polling (GPS now comes from the shared CallService stream)
     _w1StatusPollTimer?.cancel();
     _w1StatusPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       unawaited(fetchW1Status());
@@ -791,8 +738,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _connectedUsersWorker?.dispose();
     _pulseTimer?.cancel();
     _pulseTimer = null;
-    _gpsPositionSubscription?.cancel();
-    _gpsPositionSubscription = null;
+    _staleRefreshTimer?.cancel();
+    _staleRefreshTimer = null;
     super.onClose();
   }
 
@@ -830,7 +777,6 @@ class MapController extends GetxController with WidgetsBindingObserver {
     if (Get.isRegistered<CallService>()) {
       try {
         _callService = Get.find<CallService>();
-        hasCallTelemetry.value = true;
         _attachCallService(_callService!);
       } catch (error, stackTrace) {
         debugPrint('Failed to locate CallService: $error\n$stackTrace');
@@ -846,10 +792,14 @@ class MapController extends GetxController with WidgetsBindingObserver {
       (_) => unawaited(_refreshParticipantAnnotations()),
     );
 
+    // Incident GPS derives from the single CallService position stream — this
+    // controller no longer runs its own Geolocator subscription.
+    final initialLocation = service.localLocationRx.value;
+    if (initialLocation != null) _applyLocalLocation(initialLocation);
     _localLocationWorker ??= ever<ParticipantLocation?>(
       service.localLocationRx,
       (location) {
-        if (location != null) unawaited(_positionCameraOver(location));
+        if (location != null) _applyLocalLocation(location);
         unawaited(_refreshParticipantAnnotations());
       },
     );
@@ -866,53 +816,106 @@ class MapController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> _setupAgentLayers(MapboxMap map) async {
-    _agentLayersReady = false;
+    // Idempotent: [onStyleLoaded] can fire repeatedly. Add the source/layers
+    // only if missing, and only mark ready once the source genuinely exists —
+    // never assume success, so a failed add can't leave us "ready" with no
+    // source (which silently drops every marker, the original first-launch bug).
     try {
-      await map.style.addSource(
-        GeoJsonSource(
-          id: _kAgentSourceId,
-          data: '{"type":"FeatureCollection","features":[]}',
-        ),
-      );
-    } catch (_) {}
+      if (!await map.style.styleSourceExists(_kAgentSourceId)) {
+        await map.style.addSource(
+          GeoJsonSource(
+            id: _kAgentSourceId,
+            data: '{"type":"FeatureCollection","features":[]}',
+          ),
+        );
+      }
 
-    // Pulse ring — animates outward and fades
-    try {
-      await map.style.addLayer(
-        CircleLayer(
-          id: _kAgentPulseLayerId,
-          sourceId: _kAgentSourceId,
-          slot: 'top',
-          circleColor: 0xFFFFD700,
-          circleRadius: 8.0,
-          circleOpacity: 0.5,
-          circleStrokeWidth: 0.0,
-          circleEmissiveStrength: 1.0,
-        ),
-      );
-    } catch (_) {}
+      // Pulse ring — animates outward and fades. The filter hides the pulse for
+      // agents that have lost signal (stale == true) so a frozen marker reads as
+      // "no live position" rather than an active ping.
+      if (!await map.style.styleLayerExists(_kAgentPulseLayerId)) {
+        await map.style.addLayer(
+          CircleLayer(
+            id: _kAgentPulseLayerId,
+            sourceId: _kAgentSourceId,
+            slot: 'top',
+            filter: <Object>['!', <Object>['get', 'stale']],
+            circleColor: 0xFFFFD700,
+            circleRadius: 8.0,
+            circleOpacity: 0.5,
+            circleStrokeWidth: 0.0,
+            circleEmissiveStrength: 1.0,
+          ),
+        );
+      }
 
-    // Solid dot with white halo on top
-    try {
-      await map.style.addLayer(
-        CircleLayer(
-          id: _kAgentDotLayerId,
-          sourceId: _kAgentSourceId,
-          slot: 'top',
-          circleColor: 0xFFFFD700,
-          circleRadius: 8.0,
-          circleOpacity: 1.0,
-          circleStrokeColor: 0xFFFFFFFF,
-          circleStrokeWidth: 3.0,
-          circleStrokeOpacity: 1.0,
-          circleEmissiveStrength: 1.0,
-        ),
-      );
-    } catch (_) {}
+      // Solid dot with white halo on top. Gold while live, grey once the agent
+      // has lost signal (data-driven on the per-feature `stale` property).
+      if (!await map.style.styleLayerExists(_kAgentDotLayerId)) {
+        await map.style.addLayer(
+          CircleLayer(
+            id: _kAgentDotLayerId,
+            sourceId: _kAgentSourceId,
+            slot: 'top',
+            circleColorExpression: <Object>[
+              'case',
+              <Object>['get', 'stale'],
+              '#9E9E9E',
+              '#FFD700',
+            ],
+            circleRadius: 8.0,
+            circleOpacity: 1.0,
+            circleStrokeColor: 0xFFFFFFFF,
+            circleStrokeWidth: 3.0,
+            circleStrokeOpacity: 1.0,
+            circleEmissiveStrength: 1.0,
+          ),
+        );
+      }
 
-    _agentLayersReady = true;
+      // Text label below the dot, shown only when the agent has lost signal:
+      // "Última conexión: HH:mm:ss". Fresh agents carry an empty label string.
+      if (!await map.style.styleLayerExists(_kAgentLabelLayerId)) {
+        await map.style.addLayer(
+          SymbolLayer(
+            id: _kAgentLabelLayerId,
+            sourceId: _kAgentSourceId,
+            slot: 'top',
+            textFieldExpression: <Object>['get', 'label'],
+            textSize: 11.0,
+            textOffset: <double>[0.0, 1.6],
+            textAnchor: TextAnchor.TOP,
+            textColor: 0xFFFFFFFF,
+            textHaloColor: 0xCC000000,
+            textHaloWidth: 1.4,
+            textAllowOverlap: true,
+            textEmissiveStrength: 1.0,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('_setupAgentLayers: $e');
+    }
+
+    _agentLayersReady = await map.style.styleSourceExists(_kAgentSourceId);
+    if (!_agentLayersReady) {
+      debugPrint('_setupAgentLayers: source missing after setup — will retry on next style load');
+      return;
+    }
     _startPulseAnimation();
+    _startStaleRefresh();
     unawaited(_refreshParticipantAnnotations());
+  }
+
+  /// Re-evaluates marker staleness on a timer. Going silent fires no event, so
+  /// without this tick a peer that lost signal would stay gold until its next
+  /// (never-arriving) update; this flips it to grey + shows the label.
+  void _startStaleRefresh() {
+    _staleRefreshTimer?.cancel();
+    _staleRefreshTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_refreshParticipantAnnotations()),
+    );
   }
 
   void _startPulseAnimation() {
@@ -946,15 +949,25 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
     final features = <Map<String, dynamic>>[];
     if (service != null) {
+      final lastSeen = service.remoteLastSeen;
+      final now = DateTime.now();
       for (final entry in service.remoteLocationsRx.entries) {
         if (entry.key == localUid) continue;
+        final seenAt = lastSeen[entry.key];
+        final isStale = seenAt == null || now.difference(seenAt) > _staleAfter;
         features.add(<String, dynamic>{
           'type': 'Feature',
           'geometry': <String, dynamic>{
             'type': 'Point',
             'coordinates': <double>[entry.value.longitude, entry.value.latitude],
           },
-          'properties': <String, dynamic>{'uid': entry.key},
+          'properties': <String, dynamic>{
+            'uid': entry.key,
+            'stale': isStale,
+            'label': isStale
+                ? 'Última conexión: ${_formatClock(seenAt ?? entry.value.timestamp)}'
+                : '',
+          },
         });
       }
     }
@@ -969,6 +982,13 @@ class MapController extends GetxController with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('_refreshParticipantAnnotations: $e');
     }
+  }
+
+  /// Formats a local wall-clock time as HH:mm:ss for the "última conexión" label.
+  static String _formatClock(DateTime time) {
+    final local = time.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
   }
 
   Future<void> _positionCameraOver(ParticipantLocation location) async {

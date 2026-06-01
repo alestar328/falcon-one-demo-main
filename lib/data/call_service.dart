@@ -112,6 +112,17 @@ class CallService extends GetxService {
   StreamSubscription<Position>? _positionSubscription;
   int? _locationStreamId;
   int? _currentUid;
+  Timer? _locationHeartbeatTimer;
+  DateTime? _lastLocationSendAt;
+
+  // Last time we received a data-stream message from each remote uid. The
+  // marker itself is kept indefinitely (last-known position) so an agent that
+  // loses signal — e.g. driving through a tunnel — does NOT vanish from the
+  // map; it is only removed on a graceful quit / channel leave. Consumers read
+  // [remoteLastSeen] to tell whether a peer has gone silent ("lost signal")
+  // and how stale its position is.
+  final Map<int, DateTime> _remoteLastSeen = <int, DateTime>{};
+  static const Duration _minSendInterval = Duration(seconds: 1);
 
   // UID fijo de la bodycam en Agora — se activa cuando el dispositivo emite video
   static const int bodyCamAgoraUid = 9001;
@@ -143,6 +154,11 @@ class CallService extends GetxService {
   RxInt get satelliteCountRx => _satelliteCount;
   RxInt get connectedUsersCountRx => _connectedUsersCount;
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
+
+  /// Last time a data-stream message was received from each remote uid. Used by
+  /// the map layer to flag peers that have gone silent (lost signal) and to
+  /// render their "última conexión" timestamp.
+  Map<int, DateTime> get remoteLastSeen => Map.unmodifiable(_remoteLastSeen);
 
   AgoraCallConfig get config => _config;
 
@@ -181,6 +197,7 @@ class CallService extends GetxService {
             'CallService: joined channel ${connection.channelId} as ${connection.localUid} after $elapsed ms',
           );
           _sendLatestLocalLocationSnapshot();
+          _startLocationHeartbeat();
           unawaited(
             CallForegroundTaskManager.startOrUpdate(
               channelName: connection.channelId ?? _config.channelId,
@@ -190,6 +207,9 @@ class CallService extends GetxService {
         onUserJoined: (connection, remoteUid, elapsed) {
           _connectedUsersCount.value++;
           debugPrint('CallService: remote user $remoteUid joined ${connection.channelId}');
+          // Re-broadcast our position so the newcomer sees us immediately,
+          // without waiting for the next GPS fix or heartbeat tick.
+          _sendLatestLocalLocationSnapshot();
           if (remoteUid == bodyCamAgoraUid) {
             _bodyCamVideoUid.value = remoteUid;
             debugPrint('CallService: bodycam detected → activating video uid=$remoteUid');
@@ -197,9 +217,15 @@ class CallService extends GetxService {
         },
         onUserOffline: (connection, remoteUid, reason) {
           if (_connectedUsersCount.value > 1) _connectedUsersCount.value--;
-          debugPrint('CallService: remote user $remoteUid left ${connection.channelId}');
-          _remoteLocations.remove(remoteUid);
           if (remoteUid == bodyCamAgoraUid) _bodyCamVideoUid.value = null;
+          // Only drop the map marker on a graceful quit. A transient drop
+          // (frequent while moving) keeps the last-known marker; the TTL sweep
+          // removes it later if the peer never comes back.
+          if (reason == UserOfflineReasonType.userOfflineQuit) {
+            _remoteLocations.remove(remoteUid);
+            _remoteLastSeen.remove(remoteUid);
+          }
+          debugPrint('CallService: remote user $remoteUid offline (reason=$reason)');
         },
         onRemoteVideoStateChanged: (connection, remoteUid, state, reason, elapsed) {
           debugPrint('CallService: video state uid=$remoteUid state=$state reason=$reason');
@@ -216,6 +242,9 @@ class CallService extends GetxService {
           _hasJoined.value = false;
           _connectedUsersCount.value = 0;
           _remoteLocations.clear();
+          _remoteLastSeen.clear();
+          _locationHeartbeatTimer?.cancel();
+          _locationHeartbeatTimer = null;
           debugPrint('CallService: left channel ${connection.channelId}');
           unawaited(CallForegroundTaskManager.stop());
         },
@@ -386,7 +415,7 @@ class CallService extends GetxService {
 
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.best,
-      distanceFilter: 0,
+      distanceFilter: 5,
     );
 
     _positionSubscription =
@@ -441,8 +470,15 @@ class CallService extends GetxService {
 
     _updateSatelliteMetrics(position);
 
+    // Throttle on-the-wire sends so fast movement can't flood the data stream.
+    // The 3 s heartbeat still re-broadcasts the latest fix, so nothing is lost.
     if (_hasJoined.value) {
-      unawaited(_sendLocationUpdate(latestLocation));
+      final now = DateTime.now();
+      final last = _lastLocationSendAt;
+      if (last == null || now.difference(last) >= _minSendInterval) {
+        _lastLocationSendAt = now;
+        unawaited(_sendLocationUpdate(latestLocation));
+      }
     }
   }
 
@@ -526,6 +562,7 @@ class CallService extends GetxService {
       ).copyWith(uid: remoteUid);
       debugPrint('CallService[GPS-DBG]: stored location uid=$remoteUid lat=${location.latitude} lng=${location.longitude}');
       _remoteLocations[remoteUid] = location;
+      _remoteLastSeen[remoteUid] = DateTime.now();
     } catch (error, stackTrace) {
       debugPrint(
         'CallService: failed to decode stream message from $remoteUid: $error',
@@ -544,6 +581,19 @@ class CallService extends GetxService {
 
     final resolved = latest.copyWith(uid: _currentUid ?? latest.uid);
     unawaited(_sendLocationUpdate(resolved));
+  }
+
+  /// Periodically re-broadcasts the latest known local location so peers keep
+  /// (or recover) our marker even when we are stationary, after packet loss, or
+  /// when a peer joins/reconnects later. Agora data-stream messages are
+  /// ephemeral, so without this heartbeat a still agent would silently stop
+  /// appearing for any new viewer.
+  void _startLocationHeartbeat() {
+    _locationHeartbeatTimer?.cancel();
+    _locationHeartbeatTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _sendLatestLocalLocationSnapshot(),
+    );
   }
 
   /// Cancels the in-flight geolocator subscription.
@@ -583,7 +633,11 @@ class CallService extends GetxService {
     _isSpeakerMuted.value = false;
     _currentUid = null;
     _locationStreamId = null;
+    _locationHeartbeatTimer?.cancel();
+    _locationHeartbeatTimer = null;
+    _lastLocationSendAt = null;
     _remoteLocations.clear();
+    _remoteLastSeen.clear();
     _localLocation.value = null;
     _satelliteCount.value = 0;
     _connectedUsersCount.value = 0;

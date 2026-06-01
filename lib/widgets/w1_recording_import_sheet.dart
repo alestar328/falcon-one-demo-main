@@ -36,8 +36,6 @@ class W1RecordingImportSheet extends GetView<MapController> {
           final gpsReady = controller.incidentGpsReady.value;
           final lat = controller.incidentLatitude.value;
           final lng = controller.incidentLongitude.value;
-          final micOn = controller.isMicOn.value;
-          final speakerOn = controller.isSpeakerOn.value;
           final speakerMuted = controller.isSpeakerMuted.value;
           final micMuted = controller.isMicrophoneMuted.value;
 
@@ -96,9 +94,8 @@ class W1RecordingImportSheet extends GetView<MapController> {
                   gpsLine: gpsReady
                       ? 'GPS: ${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'
                       : 'GPS: N/A (still acquiring)',
-                  micLine: 'Mic: ${micOn ? 'on' : 'off'}${micMuted ? ' (call muted)' : ''}',
-                  speakerLine:
-                      'Speaker: ${speakerOn ? 'on' : 'off'}${speakerMuted ? ' (call muted)' : ''}',
+                  micLine: 'Mic: ${micMuted ? 'off' : 'on'}',
+                  speakerLine: 'Speaker: ${speakerMuted ? 'off' : 'on'}',
                   uploading: controller.isUploading.value,
                   onUpload: () async {
                     await controller.uploadW1DownloadedRecording();

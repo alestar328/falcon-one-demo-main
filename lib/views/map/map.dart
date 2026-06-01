@@ -1,6 +1,7 @@
 import 'package:falcon_one_demo/components/panel_button.dart';
 import 'package:falcon_one_demo/controllers/glasses_controller.dart';
 import 'package:falcon_one_demo/controllers/map_controller.dart';
+import 'package:falcon_one_demo/views/camera/camera_livestream_view.dart';
 import 'package:falcon_one_demo/widgets/bodycam_stream_widget.dart';
 import 'package:falcon_one_demo/widgets/glasses_status_banner.dart';
 import 'package:flutter/material.dart';
@@ -29,13 +30,64 @@ class MapView extends GetView<MapController> {
         _buildMap(),
         _buildStreamOverlay(),
         _buildButtonPanel(),
+        _buildCameraSwipeHandle(),
       ]),
+    );
+  }
+
+  void _openCamera() {
+    Get.to(
+      () => const CameraLivestreamView(),
+      transition: Transition.rightToLeft,
+      duration: const Duration(milliseconds: 280),
+    );
+  }
+
+  /// Right-edge affordance: swipe right-to-left (or tap) to open the camera /
+  /// livestream view. Lives on the screen edge so it never steals the map's
+  /// own horizontal pan gestures.
+  Widget _buildCameraSwipeHandle() {
+    return Positioned(
+      top: 0,
+      bottom: 0,
+      right: 0,
+      child: Center(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _openCamera,
+          onHorizontalDragEnd: (details) {
+            final v = details.primaryVelocity ?? 0;
+            if (v < -250) _openCamera();
+          },
+          child: SafeArea(
+            child: Container(
+              width: 30,
+              height: 72,
+              decoration: const BoxDecoration(
+                color: Colors.black45,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  bottomLeft: Radius.circular(12),
+                ),
+              ),
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.chevron_left, color: Colors.white70, size: 22),
+                  Icon(Icons.videocam, color: Colors.white70, size: 16),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
   Widget _buildMap() {
     return MapWidget(
       onMapCreated: controller.onMapCreated,
+      onStyleLoadedListener: controller.onStyleLoaded,
       styleUri: "mapbox://styles/fiddlie-ed/cmc9h7ar2035801sm6361cdtc",
       cameraOptions: CameraOptions(
         zoom: 16.0,
@@ -231,13 +283,6 @@ class MapView extends GetView<MapController> {
                         const Icon(Icons.people),
                         Obx(() => Text(
                             controller.numUsers.value.toString())),
-                      ],
-                    ),
-                    Row(
-                      spacing: 10.0,
-                      children: [
-                        const Icon(Icons.signal_wifi_4_bar),
-                        Obx(() => Text(controller.signalStatus.value)),
                       ],
                     ),
                     Row(
