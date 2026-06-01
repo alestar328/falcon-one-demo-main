@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:falcon_one_demo/app_ui_keys.dart';
@@ -23,6 +25,7 @@ enum IncidentUploadUiPhase {
   error,
 }
 
+class MapController extends GetxController with WidgetsBindingObserver {
 class MapController extends GetxController with WidgetsBindingObserver {
   MapboxMap? mapboxMap;
 
@@ -137,7 +140,15 @@ class MapController extends GetxController with WidgetsBindingObserver {
       debugPrint('startStream: Agora failed to start — stream aborted');
       return;
     }
+    final ok = await ensureAgoraStarted();
+    if (!ok) {
+      debugPrint('startStream: Agora failed to start — stream aborted');
+      return;
+    }
     isStreaming.value = true;
+    if (_bodyCam.state == BtState.connected) {
+      await _bodyCam.startStream();
+    }
     if (_bodyCam.state == BtState.connected) {
       await _bodyCam.startStream();
     }
@@ -278,6 +289,25 @@ class MapController extends GetxController with WidgetsBindingObserver {
     }
 
     // STATUS JSON polling response
+    // Physical button push-notifications
+    if (data.contains('BTN_REC_START')) {
+      isRecording.value = true;
+      return;
+    }
+    if (data.contains('BTN_REC_STOP')) {
+      isRecording.value = false;
+      return;
+    }
+    if (data.contains('BTN_STREAM_START')) {
+      unawaited(_onBodyCamStreamStarted());
+      return;
+    }
+    if (data.contains('BTN_STREAM_STOP')) {
+      unawaited(_onBodyCamStreamStopped());
+      return;
+    }
+
+    // STATUS JSON polling response
     if (data.contains('"battery"') || data.contains('"recording"')) {
       try {
         final batMatch = RegExp(r'"battery":(\d+)').firstMatch(data);
@@ -294,9 +324,28 @@ class MapController extends GetxController with WidgetsBindingObserver {
           } else if (!streaming && isStreaming.value) {
             unawaited(_onBodyCamStreamStopped());
           }
+          if (streaming && !isStreaming.value) {
+            unawaited(_onBodyCamStreamStarted());
+          } else if (!streaming && isStreaming.value) {
+            unawaited(_onBodyCamStreamStopped());
+          }
         }
       } catch (_) {}
     }
+  }
+
+  // Bodycam started stream via physical button — sync phone Agora (subscribe only)
+  Future<void> _onBodyCamStreamStarted() async {
+    final ok = await ensureAgoraStarted();
+    if (!ok) return;
+    isStreaming.value = true;
+    _ensureCallService()?.setBodyCamVideoActive(true);
+  }
+
+  // Bodycam stopped stream via physical button — clear video overlay only
+  Future<void> _onBodyCamStreamStopped() async {
+    isStreaming.value = false;
+    _ensureCallService()?.setBodyCamVideoActive(false);
   }
 
   // Bodycam started stream via physical button — sync phone Agora (subscribe only)
@@ -709,6 +758,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
   void onInit() {
     super.onInit();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addObserver(this);
     final service = _ensureCallService();
     if (service != null) {
       _attachCallService(service);
@@ -751,6 +801,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
   @override
   void onClose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_shutdownAgora());
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_shutdownAgora());
     _bodyCamSub?.cancel();
@@ -828,6 +880,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
   void _attachCallService(CallService service) {
     _remoteLocationsWorker ??= ever<Map<int, ParticipantLocation>>(
       service.remoteLocationsRx,
+      (_) => unawaited(_refreshParticipantAnnotations()),
       (_) => unawaited(_refreshParticipantAnnotations()),
     );
 
