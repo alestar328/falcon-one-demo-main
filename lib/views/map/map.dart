@@ -122,8 +122,6 @@ class MapView extends GetView<MapController> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 6, vertical: 2),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(4),
@@ -133,11 +131,6 @@ class MapView extends GetView<MapController> {
                         children: [
                           Icon(Icons.circle, color: Colors.white, size: 8),
                           SizedBox(width: 4),
-                          Text('LIVE',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold)),
                           Text('LIVE',
                               style: TextStyle(
                                   color: Colors.white,
@@ -157,8 +150,6 @@ class MapView extends GetView<MapController> {
   }
 
   Widget _buildButtonPanel() {
-    final glasses = Get.find<GlassesController>();
-
     final glasses = Get.find<GlassesController>();
 
     return Positioned(
@@ -191,42 +182,7 @@ class MapView extends GetView<MapController> {
                     Expanded(
                       child: Row(
                         spacing: 8.0,
-            // ── Left column: audio+bodycam row / photo+stream+glasses row ──
-            Expanded(
-              child: Obx(() {
-                final state     = controller.bodyCamState.value;
-                final recording = controller.isRecording.value;
-                final streaming = controller.isStreaming.value;
-                final connected = state == 'connected';
-
-                final glassesConnected = glasses.isConnected.value;
-                final glassesRecording = glasses.isRecording.value;
-                final glassesScanning  = glasses.isScanning.value;
-
-                return Column(
-                  spacing: 8.0,
-                  children: [
-                    // Row 1: speaker | mic | bodycam
-                    Expanded(
-                      child: Row(
-                        spacing: 8.0,
                         children: [
-                          Expanded(
-                            child: Obx(() => PanelButton(
-                              iconData: controller.isSpeakerMuted.value
-                                  ? Icons.volume_off
-                                  : Icons.volume_up,
-                              onTap: () async => controller.toggleSpeakerMute(),
-                            )),
-                          ),
-                          Expanded(
-                            child: Obx(() => PanelButton(
-                              iconData: controller.isMicrophoneMuted.value
-                                  ? Icons.mic_off
-                                  : Icons.mic,
-                              onTap: () async => controller.toggleMicrophoneMute(),
-                            )),
-                          ),
                           Expanded(
                             child: Obx(() => PanelButton(
                               iconData: controller.isSpeakerMuted.value
@@ -256,14 +212,6 @@ class MapView extends GetView<MapController> {
                               onTap: controller.toggleBodyCam,
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                    // Row 2: photo | livestream | glasses
-                    Expanded(
-                      child: Row(
-                        spacing: 8.0,
-                        children: [
                         ],
                       ),
                     ),
@@ -307,39 +255,18 @@ class MapView extends GetView<MapController> {
                           ),
                         ],
                       ),
-                          Expanded(
-                            child: PanelButton(
-                              iconData: glassesScanning
-                                  ? Icons.search
-                                  : FontAwesomeIcons.glasses,
-                              iconColor: glassesRecording
-                                  ? Colors.red
-                                  : glassesConnected
-                                      ? Colors.white
-                                      : Colors.white38,
-                              onTap: glasses.onGlassesButtonTapped,
-                            ),
-                          ),
-                        ],
-                      ),
                     ),
-                  ],
-                );
-              }),
                   ],
                 );
               }),
             ),
             // ── Right column: status info + glasses banner ────────────────
-            // ── Right column: status info + glasses banner ────────────────
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.only(left: 10.0),
                 padding: const EdgeInsets.only(left: 10.0),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  spacing: 8.0,
                   spacing: 8.0,
                   children: [
                     // Phone battery always; bodycam battery appended (with a

@@ -106,7 +106,6 @@ class CallService extends GetxService {
   final Rxn<ParticipantLocation> _localLocation = Rxn<ParticipantLocation>();
   final RxInt _satelliteCount = 0.obs;
   final RxInt _connectedUsersCount = 0.obs;
-  final RxInt _connectedUsersCount = 0.obs;
 
   RtcEngine? _engine;
   bool _isInitialized = false;
@@ -232,7 +231,6 @@ class CallService extends GetxService {
   Rxn<ParticipantLocation> get localLocationRx => _localLocation;
   RxInt get satelliteCountRx => _satelliteCount;
   RxInt get connectedUsersCountRx => _connectedUsersCount;
-  RxInt get connectedUsersCountRx => _connectedUsersCount;
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
   RxBool get isPublishingCameraRx => _isPublishingCamera;
 
@@ -267,7 +265,6 @@ class CallService extends GetxService {
         onJoinChannelSuccess: (connection, elapsed) {
           _hasJoined.value = true;
           _currentUid = connection.localUid;
-          _connectedUsersCount.value = 1;
           _connectedUsersCount.value = 1;
           final currentLocal = _localLocation.value;
           if (currentLocal != null && currentLocal.uid != _currentUid) {
@@ -343,7 +340,6 @@ class CallService extends GetxService {
         onStreamMessage:
             (connection, remoteUid, streamId, data, length, sentTs) {
               debugPrint('CallService[GPS-DBG]: onStreamMessage from uid=$remoteUid length=$length');
-              debugPrint('CallService[GPS-DBG]: onStreamMessage from uid=$remoteUid length=$length');
               _handleIncomingStreamMessage(remoteUid, data, length);
             },
         onStreamMessageError:
@@ -357,13 +353,9 @@ class CallService extends GetxService {
 
     // Phone is receive-only: enable audio module for playback but permanently
     // block the local mic. Only the bodycam (UID 9001) ever publishes audio.
-    // Phone is receive-only: enable audio module for playback but permanently
-    // block the local mic. Only the bodycam (UID 9001) ever publishes audio.
     await rtcEngine.enableAudio();
     await rtcEngine.muteLocalAudioStream(true);
-    await rtcEngine.muteLocalAudioStream(true);
     await rtcEngine.setDefaultAudioRouteToSpeakerphone(true);
-    _isMicrophoneMuted.value = true;
     _isMicrophoneMuted.value = true;
     _isSpeakerMuted.value = false;
 
@@ -387,7 +379,6 @@ class CallService extends GetxService {
       options: const ChannelMediaOptions(
         channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
-        publishMicrophoneTrack: false,  // muted until user enables mic
         publishMicrophoneTrack: false,  // muted until user enables mic
         publishCameraTrack: false,
         autoSubscribeAudio: true,
@@ -654,13 +645,11 @@ class CallService extends GetxService {
 
       if (decoded is! Map) {
         debugPrint('CallService[GPS-DBG]: non-map payload from $remoteUid');
-        debugPrint('CallService[GPS-DBG]: non-map payload from $remoteUid');
         return;
       }
 
       final message = Map<String, dynamic>.from(decoded);
       if (message['type'] != 'location') {
-        debugPrint('CallService[GPS-DBG]: unknown type "${message['type']}" from $remoteUid');
         debugPrint('CallService[GPS-DBG]: unknown type "${message['type']}" from $remoteUid');
         return;
       }
@@ -668,7 +657,6 @@ class CallService extends GetxService {
       final location = ParticipantLocation.fromJson(
         message,
       ).copyWith(uid: remoteUid);
-      debugPrint('CallService[GPS-DBG]: stored location uid=$remoteUid lat=${location.latitude} lng=${location.longitude}');
       debugPrint('CallService[GPS-DBG]: stored location uid=$remoteUid lat=${location.latitude} lng=${location.longitude}');
       _remoteLocations[remoteUid] = location;
       _remoteLastSeen[remoteUid] = DateTime.now();
@@ -749,7 +737,6 @@ class CallService extends GetxService {
     _remoteLastSeen.clear();
     _localLocation.value = null;
     _satelliteCount.value = 0;
-    _connectedUsersCount.value = 0;
     _connectedUsersCount.value = 0;
     await _stopLocationUpdates();
     await CallForegroundTaskManager.stop();
