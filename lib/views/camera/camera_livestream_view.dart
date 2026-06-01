@@ -1,14 +1,23 @@
-import 'package:camera/camera.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:falcon_one_demo/controllers/map_controller.dart';
+import 'package:falcon_one_demo/data/call_service.dart';
+import 'package:falcon_one_demo/widgets/bodycam_stream_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// Full-screen camera view.
+/// Full-screen livestream view.
 ///
-/// Reached by swiping right-to-left from the main map ([MapView]). For now it
-/// just opens the conventional device camera and shows a livestream icon; the
-/// actual livestream transport (LiveKit) is wired but left disabled until we
-/// have server credentials.
+/// Reached by swiping right-to-left from the main map ([MapView]). Shows live
+/// video and lets the agent publish their phone camera to the Agora channel:
+///   • If the bodycam (Agora UID 9001) is live, its video is shown — the
+///     bodycam is the source of truth when connected.
+///   • Otherwise the phone's own camera is previewed locally, and the
+///     livestream button publishes it to the channel so other agents can watch.
+///
+/// Saving the stream as incident evidence (Nexus / Agora Cloud Recording) is
+/// handled server-side and wired separately; this screen only drives the live
+/// transport.
 class CameraLivestreamView extends StatefulWidget {
   const CameraLivestreamView({super.key});
 
@@ -16,22 +25,20 @@ class CameraLivestreamView extends StatefulWidget {
   State<CameraLivestreamView> createState() => _CameraLivestreamViewState();
 }
 
-enum _CamState { initializing, ready, error, noPermission }
+enum _CamState { initializing, ready, error, noPermission, noAgora }
 
 class _CameraLivestreamViewState extends State<CameraLivestreamView> {
-  CameraController? _controller;
-  List<CameraDescription> _cameras = const [];
-  int _cameraIndex = 0;
+  CallService? _call;
   _CamState _state = _CamState.initializing;
   String _detail = '';
 
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    _prepare();
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _prepare() async {
     final status = await Permission.camera.request();
     if (!status.isGranted) {
       setState(() {
@@ -41,75 +48,60 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
       return;
     }
 
-    try {
-      _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        setState(() {
-          _state = _CamState.error;
-          _detail = 'No se encontró ninguna cámara';
-        });
-        return;
-      }
-      // Prefer the back camera.
-      _cameraIndex = _cameras.indexWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-      );
-      if (_cameraIndex < 0) _cameraIndex = 0;
-      await _startController(_cameras[_cameraIndex]);
-    } catch (e) {
+    final call = Get.isRegistered<CallService>() ? Get.find<CallService>() : null;
+    if (call == null || !call.isInitialized) {
       setState(() {
-        _state = _CamState.error;
-        _detail = e.toString();
+        _state = _CamState.noAgora;
+        _detail = 'Conexión Agora no disponible';
       });
+      return;
     }
-  }
+    _call = call;
 
-  Future<void> _startController(CameraDescription camera) async {
-    final controller = CameraController(
-      camera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    _controller = controller;
-    await controller.initialize();
+    // Opening this screen IS the "go live" gesture: if the bodycam isn't the
+    // source, start publishing the phone camera to Agora right away. When the
+    // bodycam is live it's the source of truth, so we don't publish the phone.
+    if (!call.bodyCamVideoActive) {
+      await call.startCameraPublish();
+    }
     if (!mounted) return;
     setState(() => _state = _CamState.ready);
   }
 
-  Future<void> _flipCamera() async {
-    if (_cameras.length < 2) return;
-    final old = _controller;
-    _controller = null;
-    setState(() => _state = _CamState.initializing);
-    await old?.dispose();
-    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
-    try {
-      await _startController(_cameras[_cameraIndex]);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _state = _CamState.error;
-        _detail = e.toString();
-      });
+  Future<void> _toggleLivestream() async {
+    final call = _call;
+    if (call == null) return;
+
+    // When the bodycam is the live source, "stop" means telling the bodycam to
+    // stop emitting (STREAM_STOP over BT) via the map controller — just hiding
+    // it locally wouldn't cut the actual signal.
+    if (call.bodyCamVideoActive) {
+      final map = Get.isRegistered<MapController>()
+          ? Get.find<MapController>()
+          : null;
+      await map?.stopStream();
+      // Bodycam gone: fall back to the phone camera preview (idle, not live).
+      if (!call.bodyCamVideoActive) {
+        await call.startLocalPreview();
+      }
+      return;
+    }
+
+    if (call.isPublishingCamera) {
+      await call.stopCameraPublish();
+    } else {
+      await call.startCameraPublish();
     }
   }
 
-  void _onLivestreamTap() {
-    Get.snackbar(
-      'Livestream',
-      'Transmisión en vivo: próximamente',
-      snackPosition: SnackPosition.BOTTOM,
-      backgroundColor: Colors.black87,
-      colorText: Colors.white,
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 96),
-      duration: const Duration(seconds: 2),
-    );
+  Future<void> _flipCamera() async {
+    await _call?.switchCamera();
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
-    _controller = null;
+    // Stop sending and turn the camera off when leaving the screen.
+    _call?.stopCameraPublish(stopPreview: true);
     super.dispose();
   }
 
@@ -126,17 +118,18 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _buildCameraArea(),
+            _buildVideoArea(),
             _buildTopBar(),
             _buildBackHint(),
             if (_state == _CamState.ready) _buildControls(),
+            if (_state == _CamState.ready) _buildLiveBadge(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCameraArea() {
+  Widget _buildVideoArea() {
     switch (_state) {
       case _CamState.initializing:
         return _centerInfo(
@@ -146,6 +139,11 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
       case _CamState.noPermission:
         return _centerInfo(
           const Icon(Icons.no_photography, color: Colors.white38, size: 40),
+          _detail,
+        );
+      case _CamState.noAgora:
+        return _centerInfo(
+          const Icon(Icons.cloud_off, color: Colors.white38, size: 40),
           _detail,
         );
       case _CamState.error:
@@ -158,29 +156,24 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     }
   }
 
-  /// Fills the screen with the camera preview, cropping to cover.
+  /// Fills the screen with the active video source.
   Widget _buildPreview() {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) {
-      return const SizedBox.shrink();
-    }
-    final size = MediaQuery.of(context).size;
-    final preview = controller.value.previewSize;
-    // previewSize is reported in sensor (landscape) orientation, so swap.
-    final pw = preview?.height ?? size.width;
-    final ph = preview?.width ?? size.height;
-    return ClipRect(
-      child: SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: pw,
-            height: ph,
-            child: CameraPreview(controller),
-          ),
+    final call = _call;
+    if (call == null) return const SizedBox.shrink();
+    return Obx(() {
+      // Bodycam is the source of truth whenever it's live in the channel.
+      if (call.bodyCamVideoUidRx.value != null) {
+        return const BodyCamStreamWidget(borderRadius: 0);
+      }
+      // Otherwise show the phone's own camera (Agora local view, uid 0).
+      return AgoraVideoView(
+        controller: VideoViewController(
+          rtcEngine: call.engine,
+          canvas: const VideoCanvas(uid: 0),
+          useFlutterTexture: true,
         ),
-      ),
-    );
+      );
+    });
   }
 
   Widget _buildTopBar() {
@@ -204,7 +197,49 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     );
   }
 
+  /// Red LIVE pill shown while publishing the phone camera, or while the
+  /// bodycam is the live source.
+  Widget _buildLiveBadge() {
+    final call = _call;
+    if (call == null) return const SizedBox.shrink();
+    return Obx(() {
+      final live =
+          call.isPublishingCameraRx.value || call.bodyCamVideoUidRx.value != null;
+      if (!live) return const SizedBox.shrink();
+      return Positioned(
+        top: 0,
+        right: 12,
+        child: SafeArea(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.red,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.circle, color: Colors.white, size: 8),
+                SizedBox(width: 4),
+                Text(
+                  'LIVE',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
   Widget _buildControls() {
+    final call = _call;
+    if (call == null) return const SizedBox.shrink();
     return Positioned(
       bottom: 0,
       left: 0,
@@ -214,24 +249,28 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Livestream icon (transport not wired yet).
+            // Livestream toggle. Red while live (phone publishing OR bodycam as
+            // source); tapping stops whichever source is live.
+            Obx(() {
+              final bodycamLive = call.bodyCamVideoUidRx.value != null;
+              final publishing = call.isPublishingCameraRx.value;
+              final live = publishing || bodycamLive;
+              return _circleButton(
+                icon: live ? Icons.sensors : Icons.sensors_off,
+                color: live ? Colors.red : Colors.white,
+                size: 64,
+                iconSize: 30,
+                onTap: _toggleLivestream,
+              );
+            }),
+            const SizedBox(width: 28),
             _circleButton(
-              icon: Icons.sensors,
+              icon: Icons.cameraswitch,
               color: Colors.white,
-              size: 64,
-              iconSize: 30,
-              onTap: _onLivestreamTap,
+              size: 52,
+              iconSize: 24,
+              onTap: _flipCamera,
             ),
-            if (_cameras.length > 1) ...[
-              const SizedBox(width: 28),
-              _circleButton(
-                icon: Icons.cameraswitch,
-                color: Colors.white,
-                size: 52,
-                iconSize: 24,
-                onTap: _flipCamera,
-              ),
-            ],
           ],
         ),
       ),
@@ -243,18 +282,21 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     required Color color,
     required double size,
     required double iconSize,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
   }) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: const BoxDecoration(
-          color: Colors.black45,
-          shape: BoxShape.circle,
+      child: Opacity(
+        opacity: onTap == null ? 0.5 : 1.0,
+        child: Container(
+          width: size,
+          height: size,
+          decoration: const BoxDecoration(
+            color: Colors.black45,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: color, size: iconSize),
         ),
-        child: Icon(icon, color: color, size: iconSize),
       ),
     );
   }

@@ -128,12 +128,17 @@ class CallService extends GetxService {
   static const int bodyCamAgoraUid = 9001;
   final Rxn<int> _bodyCamVideoUid = Rxn<int>();
 
+  // True while THIS phone is publishing its own camera to the channel (the
+  // local agent's livestream). Independent of the bodycam (uid 9001).
+  final RxBool _isPublishingCamera = false.obs;
+
   bool get isInitialized => _isInitialized;
   bool get hasJoinedChannel => _hasJoined.value;
   bool get isMicrophoneMuted => _isMicrophoneMuted.value;
   bool get isSpeakerMuted => _isSpeakerMuted.value;
   int? get currentUid => _currentUid;
   bool get bodyCamVideoActive => _bodyCamVideoUid.value != null;
+  bool get isPublishingCamera => _isPublishingCamera.value;
 
   void setBodyCamVideoActive(bool active) {
     _bodyCamVideoUid.value = active ? bodyCamAgoraUid : null;
@@ -146,6 +151,79 @@ class CallService extends GetxService {
     }
   }
 
+  /// Turns on the local camera preview (rendered by an AgoraVideoView with
+  /// uid 0) WITHOUT publishing it to the channel. Used when the livestream
+  /// screen opens so the agent sees their camera before going live.
+  Future<void> startLocalPreview() async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.startPreview();
+    } catch (e, st) {
+      debugPrint('CallService: startLocalPreview error: $e');
+      debugPrint('$st');
+    }
+  }
+
+  /// Stops the local camera preview and capture. Call when leaving the
+  /// livestream screen.
+  Future<void> stopLocalPreview() async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.stopPreview();
+    } catch (e, st) {
+      debugPrint('CallService: stopLocalPreview error: $e');
+      debugPrint('$st');
+    }
+  }
+
+  /// Starts publishing THIS phone's camera to the channel so other
+  /// participants can watch the local agent's livestream. The same captured
+  /// frames feed the local preview (AgoraVideoView with uid 0). Idempotent.
+  Future<void> startCameraPublish() async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.startPreview();
+      await engine.muteLocalVideoStream(false);
+      await engine.updateChannelMediaOptions(
+        const ChannelMediaOptions(publishCameraTrack: true),
+      );
+      _isPublishingCamera.value = true;
+    } catch (e, st) {
+      debugPrint('CallService: startCameraPublish error: $e');
+      debugPrint('$st');
+    }
+  }
+
+  /// Stops publishing the phone camera and returns to receive-only. Keeps the
+  /// local preview alive unless [stopPreview] is set. Idempotent.
+  Future<void> stopCameraPublish({bool stopPreview = false}) async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.updateChannelMediaOptions(
+        const ChannelMediaOptions(publishCameraTrack: false),
+      );
+      await engine.muteLocalVideoStream(true);
+      if (stopPreview) await engine.stopPreview();
+      _isPublishingCamera.value = false;
+    } catch (e, st) {
+      debugPrint('CallService: stopCameraPublish error: $e');
+      debugPrint('$st');
+    }
+  }
+
+  /// Flips between front and back camera while previewing/publishing.
+  Future<void> switchCamera() async {
+    try {
+      await _engine?.switchCamera();
+    } catch (e) {
+      debugPrint('CallService: switchCamera error: $e');
+    }
+  }
+
   RxBool get hasJoinedRx => _hasJoined;
   RxBool get microphoneMutedRx => _isMicrophoneMuted;
   RxBool get speakerMutedRx => _isSpeakerMuted;
@@ -154,6 +232,7 @@ class CallService extends GetxService {
   RxInt get satelliteCountRx => _satelliteCount;
   RxInt get connectedUsersCountRx => _connectedUsersCount;
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
+  RxBool get isPublishingCameraRx => _isPublishingCamera;
 
   /// Last time a data-stream message was received from each remote uid. Used by
   /// the map layer to flag peers that have gone silent (lost signal) and to
@@ -205,7 +284,9 @@ class CallService extends GetxService {
           );
         },
         onUserJoined: (connection, remoteUid, elapsed) {
-          _connectedUsersCount.value++;
+          // Only agents (phones) count as users. The bodycam (uid 9001) is a
+          // device, not an agent, so it must NOT inflate the user count.
+          if (remoteUid != bodyCamAgoraUid) _connectedUsersCount.value++;
           debugPrint('CallService: remote user $remoteUid joined ${connection.channelId}');
           // Re-broadcast our position so the newcomer sees us immediately,
           // without waiting for the next GPS fix or heartbeat tick.
@@ -216,7 +297,11 @@ class CallService extends GetxService {
           }
         },
         onUserOffline: (connection, remoteUid, reason) {
-          if (_connectedUsersCount.value > 1) _connectedUsersCount.value--;
+          // Mirror onUserJoined: the bodycam (uid 9001) was never counted, so
+          // don't decrement for it.
+          if (remoteUid != bodyCamAgoraUid && _connectedUsersCount.value > 1) {
+            _connectedUsersCount.value--;
+          }
           if (remoteUid == bodyCamAgoraUid) _bodyCamVideoUid.value = null;
           // Only drop the map marker on a graceful quit. A transient drop
           // (frequent while moving) keeps the last-known marker; the TTL sweep
@@ -241,6 +326,7 @@ class CallService extends GetxService {
         onLeaveChannel: (connection, stats) {
           _hasJoined.value = false;
           _connectedUsersCount.value = 0;
+          _isPublishingCamera.value = false;
           _remoteLocations.clear();
           _remoteLastSeen.clear();
           _locationHeartbeatTimer?.cancel();
@@ -315,8 +401,15 @@ class CallService extends GetxService {
 
     // Phone is receive-only — mute/unmute controls the remote audio subscription,
     // never the local mic (which is permanently blocked).
-    await rtcEngine.muteAllRemoteAudioStreams(muted);
+    // Optimistic UI: flip the observable first so the icon reacts on tap; the
+    // native call below can take tens of ms. Revert if it throws.
     _isMicrophoneMuted.value = muted;
+    try {
+      await rtcEngine.muteAllRemoteAudioStreams(muted);
+    } catch (error) {
+      _isMicrophoneMuted.value = !muted;
+      rethrow;
+    }
     debugPrint('CallService remote audio muted set to $muted');
   }
 
@@ -336,6 +429,10 @@ class CallService extends GetxService {
     }
 
     final bool previousState = _isSpeakerMuted.value;
+    // Optimistic UI: flip the icon immediately. The end-of-method block below
+    // confirms (keeps `muted`) or reverts (`previousState`) once the native
+    // audio-route change resolves.
+    _isSpeakerMuted.value = muted;
     var applied = false;
     var usedRemoteMuteFallback = false;
 

@@ -269,14 +269,24 @@ class MapView extends GetView<MapController> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   spacing: 8.0,
                   children: [
-                    Row(
-                      spacing: 10.0,
-                      children: [
-                        const Icon(Icons.battery_3_bar),
-                        Obx(() =>
-                            Text("${controller.batteryLevel.value}%")),
-                      ],
-                    ),
+                    // Phone battery always; bodycam battery appended (with a
+                    // camera icon) only when the bodycam is connected.
+                    Obx(() {
+                      final bodycamConnected =
+                          controller.bodyCamState.value == 'connected' ||
+                          controller.bodyCamLiveInAgora.value;
+                      return Row(
+                        spacing: 10.0,
+                        children: [
+                          const Icon(Icons.battery_3_bar),
+                          Text("${controller.phoneBatteryLevel.value}%"),
+                          if (bodycamConnected) ...[
+                            const Icon(Icons.videocam, size: 18),
+                            Text("${controller.batteryLevel.value}%"),
+                          ],
+                        ],
+                      );
+                    }),
                     Row(
                       spacing: 10.0,
                       children: [
@@ -285,6 +295,32 @@ class MapView extends GetView<MapController> {
                             controller.numUsers.value.toString())),
                       ],
                     ),
+                    // Connection signal: reflects whether the phone is joined to
+                    // the Agora channel (green) or not (grey).
+                    Obx(() {
+                      final connected = controller.agoraConnected.value;
+                      return Row(
+                        spacing: 10.0,
+                        children: [
+                          Icon(
+                            connected
+                                ? Icons.signal_wifi_4_bar
+                                : Icons.signal_wifi_off,
+                            color: connected
+                                ? Colors.greenAccent
+                                : Colors.white38,
+                          ),
+                          Text(
+                            connected ? 'Online' : 'Sin red',
+                            style: TextStyle(
+                              color: connected
+                                  ? Colors.greenAccent
+                                  : Colors.white38,
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
                     Row(
                       spacing: 10.0,
                       children: [
@@ -293,6 +329,33 @@ class MapView extends GetView<MapController> {
                             controller.numSatellites.value.toString())),
                       ],
                     ),
+                    // Bodycam connection indicator. "Connected" means the bodycam
+                    // is reachable: BT-linked OR live in the Agora channel (the
+                    // latter is the reliable signal in the current setup).
+                    Obx(() {
+                      final connected =
+                          controller.bodyCamState.value == 'connected' ||
+                          controller.bodyCamLiveInAgora.value;
+                      return Row(
+                        spacing: 10.0,
+                        children: [
+                          Icon(
+                            connected ? Icons.videocam : Icons.videocam_off,
+                            color: connected
+                                ? Colors.greenAccent
+                                : Colors.white38,
+                          ),
+                          Text(
+                            connected ? 'Bodycam' : 'Sin bodycam',
+                            style: TextStyle(
+                              color: connected
+                                  ? Colors.greenAccent
+                                  : Colors.white38,
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
                     const GlassesStatusBanner(),
                   ],
                 ),

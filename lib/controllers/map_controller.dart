@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:battery_plus/battery_plus.dart';
 import 'package:falcon_one_demo/app_ui_keys.dart';
 import 'package:falcon_one_demo/data/call_service.dart';
 import 'package:falcon_one_demo/services/agora_launcher.dart';
@@ -32,6 +33,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Worker? _localLocationWorker;
   Worker? _satelliteCountWorker;
   Worker? _connectedUsersWorker;
+  Worker? _bodyCamVideoWorker;
+  Worker? _agoraConnectedWorker;
 
   static const _kAgentSourceId = 'falcon-remote-agents';
   static const _kAgentPulseLayerId = 'falcon-agent-pulse';
@@ -89,14 +92,25 @@ class MapController extends GetxController with WidgetsBindingObserver {
   final RxString bodyCamState = 'disconnected'.obs;
   final RxBool isRecording = false.obs;
   final RxBool isStreaming = false.obs;
+  // True while the bodycam (Agora UID 9001) is live in the channel. This is the
+  // reliable "bodycam connected" signal in the current setup, where the bodycam
+  // joins Agora on its own — independent of the (still flaky) BT link.
+  final RxBool bodyCamLiveInAgora = false.obs;
+  // Real connection signal shown in the status panel: true while the phone is
+  // joined to the Agora channel. Replaces the old hardcoded 'Good' string.
+  final RxBool agoraConnected = false.obs;
   StreamSubscription? _bodyCamSub;
   StreamSubscription? _bodyCamDataSub;
   Timer? _statusPollTimer;
 
   // UI status fields used by map.dart
-  RxInt batteryLevel = 0.obs;
+  RxInt batteryLevel = 0.obs; // bodycam battery (from BT STATUS JSON)
+  RxInt phoneBatteryLevel = 0.obs; // this phone's battery (battery_plus)
   RxInt numSatellites = 0.obs;
   RxInt numUsers = 0.obs;
+
+  final Battery _phoneBattery = Battery();
+  StreamSubscription<BatteryState>? _phoneBatterySub;
 
   void setW1BaseUrl(String ip, int port) => w1Service.setBaseUrl(ip, port);
 
@@ -159,6 +173,12 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _satelliteCountWorker = null;
     _connectedUsersWorker?.dispose();
     _connectedUsersWorker = null;
+    _bodyCamVideoWorker?.dispose();
+    _bodyCamVideoWorker = null;
+    _agoraConnectedWorker?.dispose();
+    _agoraConnectedWorker = null;
+    bodyCamLiveInAgora.value = false;
+    agoraConnected.value = false;
     numUsers.value = 0;
     numSatellites.value = 0;
     _pulseTimer?.cancel();
@@ -714,10 +734,17 @@ class MapController extends GetxController with WidgetsBindingObserver {
     // Auto-start Agora for real-time GPS sharing between agents
     unawaited(_autoStartAgora());
 
+    // Phone battery (always available, unlike the bodycam's BT-sourced level).
+    unawaited(_refreshPhoneBattery());
+    _phoneBatterySub = _phoneBattery.onBatteryStateChanged.listen((_) {
+      unawaited(_refreshPhoneBattery());
+    });
+
     // W1 HTTP status polling (GPS now comes from the shared CallService stream)
     _w1StatusPollTimer?.cancel();
     _w1StatusPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       unawaited(fetchW1Status());
+      unawaited(_refreshPhoneBattery());
     });
     unawaited(fetchW1Status());
   }
@@ -728,6 +755,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
     unawaited(_shutdownAgora());
     _bodyCamSub?.cancel();
     _bodyCamDataSub?.cancel();
+    _phoneBatterySub?.cancel();
     _statusPollTimer?.cancel();
     _bodyCam.dispose();
     _w1StatusPollTimer?.cancel();
@@ -736,11 +764,22 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _localLocationWorker?.dispose();
     _satelliteCountWorker?.dispose();
     _connectedUsersWorker?.dispose();
+    _bodyCamVideoWorker?.dispose();
+    _agoraConnectedWorker?.dispose();
     _pulseTimer?.cancel();
     _pulseTimer = null;
     _staleRefreshTimer?.cancel();
     _staleRefreshTimer = null;
     super.onClose();
+  }
+
+  Future<void> _refreshPhoneBattery() async {
+    try {
+      final level = await _phoneBattery.batteryLevel;
+      phoneBatteryLevel.value = level;
+    } catch (error) {
+      debugPrint('Phone battery read failed: $error');
+    }
   }
 
   Future<void> toggleSpeakerMute() async {
@@ -812,6 +851,16 @@ class MapController extends GetxController with WidgetsBindingObserver {
     numUsers.value = service.connectedUsersCountRx.value;
     _connectedUsersWorker ??= ever<int>(service.connectedUsersCountRx, (count) {
       numUsers.value = count;
+    });
+
+    bodyCamLiveInAgora.value = service.bodyCamVideoUidRx.value != null;
+    _bodyCamVideoWorker ??= ever<int?>(service.bodyCamVideoUidRx, (uid) {
+      bodyCamLiveInAgora.value = uid != null;
+    });
+
+    agoraConnected.value = service.hasJoinedRx.value;
+    _agoraConnectedWorker ??= ever<bool>(service.hasJoinedRx, (joined) {
+      agoraConnected.value = joined;
     });
   }
 
