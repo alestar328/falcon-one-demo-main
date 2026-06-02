@@ -920,11 +920,13 @@ class MapController extends GetxController with WidgetsBindingObserver {
         if (signal == null) return;
         service.consumeEmergency();
         final officer = signal.officer.trim();
-        // signal.uid is the emitting agent's Agora uid — that's the camera the
-        // receiver should watch, not its own.
+        // A signal from another phone is ALWAYS external — skip the Own/External
+        // chooser and show the emergency popup (siren) directly. signal.uid is
+        // the emitting agent's Agora uid — the camera the receiver should watch.
         _showEmergencyFlow(
           officer.isNotEmpty ? 'Officer $officer' : simulatedExternalAgentLabel,
           sourceUid: signal.uid,
+          directExternal: true,
         );
       },
     );
@@ -1011,15 +1013,22 @@ class MapController extends GetxController with WidgetsBindingObserver {
     );
   }
 
-  /// Shows the "Treat as: Own/External" flow, guarding against stacking.
-  /// [sourceUid] is the Agora uid whose video to show if the presenter opens the
-  /// livestream: 9001 = bodycam, any other uid = the emitting agent's phone.
-  void _showEmergencyFlow(String agentLabel, {required int sourceUid}) {
+  /// Shows the emergency flow, guarding against stacking. [sourceUid] is the
+  /// Agora uid whose video to show if the presenter opens the livestream: 9001 =
+  /// bodycam, any other uid = the emitting agent's phone. When [directExternal]
+  /// is true the Own/External chooser is skipped and the siren popup shows right
+  /// away (signals from another phone are always external).
+  void _showEmergencyFlow(
+    String agentLabel, {
+    required int sourceUid,
+    bool directExternal = false,
+  }) {
     if (_emergencyDialogOpen) return;
     _emergencyDialogOpen = true;
     showEmergencyTreatmentFlow(
       agentLabel: agentLabel,
       onOpenLivestream: () => _openLivestreamScreen(watchUid: sourceUid),
+      directExternal: directExternal,
     ).whenComplete(() => _emergencyDialogOpen = false);
   }
 

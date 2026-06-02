@@ -14,13 +14,24 @@ enum EmergencyTreatment { own, external }
 ///   2a. Own      → open the livestream straight away (no alarm).
 ///   2b. External → warning popup with siren + "Receive livestream" button.
 ///
+/// When [directExternal] is true the chooser is skipped and the external
+/// emergency popup (siren) is shown straight away — used for signals coming from
+/// another phone, which are always external by definition. The chooser is only
+/// used for the bodycam (the demo's own/external simulation).
+///
 /// [agentLabel] is the source shown on the external path (e.g. "Officer off-001"
 /// from the broadcaster payload, or the simulated "Officer 007"). [onOpenLivestream]
 /// opens the swipe livestream screen.
 Future<void> showEmergencyTreatmentFlow({
   required String agentLabel,
   required Future<void> Function() onOpenLivestream,
+  bool directExternal = false,
 }) async {
+  if (directExternal) {
+    await _showExternalEmergency(agentLabel, onOpenLivestream);
+    return;
+  }
+
   final treatment = await Get.dialog<EmergencyTreatment>(
     const _TreatAsDialog(),
     barrierDismissible: true,
@@ -29,14 +40,21 @@ Future<void> showEmergencyTreatmentFlow({
   if (treatment == EmergencyTreatment.own) {
     await onOpenLivestream();
   } else if (treatment == EmergencyTreatment.external) {
-    await Get.dialog<void>(
-      _ExternalEmergencyDialog(
-        agentLabel: agentLabel,
-        onReceiveLivestream: onOpenLivestream,
-      ),
-      barrierDismissible: false,
-    );
+    await _showExternalEmergency(agentLabel, onOpenLivestream);
   }
+}
+
+Future<void> _showExternalEmergency(
+  String agentLabel,
+  Future<void> Function() onOpenLivestream,
+) {
+  return Get.dialog<void>(
+    _ExternalEmergencyDialog(
+      agentLabel: agentLabel,
+      onReceiveLivestream: onOpenLivestream,
+    ),
+    barrierDismissible: false,
+  );
 }
 
 /// "Treat as:" — External (yellow) / Own (blue). Closable via the title "X",
