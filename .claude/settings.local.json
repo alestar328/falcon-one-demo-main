@@ -114,7 +114,14 @@
       "Bash(cat .git/rebase-merge/end)",
       "Bash(cat .git/rebase-merge/amend)",
       "Bash(cat .git/rebase-merge/stopped-sha)",
-      "Bash(flutter devices *)"
+      "Bash(flutter devices *)",
+      "PowerShell($adb = \\(Get-Command adb -ErrorAction SilentlyContinue\\); if \\($adb\\) { \"adb en PATH: $\\($adb.Source\\)\" } else { $p = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; if \\(Test-Path $p\\) { \"adb NO en PATH, pero existe en: $p\" } else { \"adb no encontrado ni en PATH ni en la ruta por defecto del SDK\" } }; \"--- flutter logs disponible? ---\"; \\(Get-Command flutter -ErrorAction SilentlyContinue\\).Source)",
+      "Bash(ls -la '/c/Users/newge/Desktop/BodyCam/body cam-20260415T211149Z-3-001/body cam/wetransfer_upgradedownload_r25-20-3901-rar_2026-03-23_0922 \\(1\\)/C16_YIMAO_CH_V2.2_20240819 Android Interface. SW/C16_YIMAO_CH_V2.2_20240819安卓界面/YIMAO_C16_TFT_PIX64-user-native_SHARKLE_9_LL_SIN.pac')",
+      "Bash(echo \"---HEX HEADER---\")",
+      "Bash(xxd '/c/Users/newge/Desktop/BodyCam/body cam-20260415T211149Z-3-001/body cam/wetransfer_upgradedownload_r25-20-3901-rar_2026-03-23_0922 \\(1\\)/C16_YIMAO_CH_V2.2_20240819 Android Interface. SW/C16_YIMAO_CH_V2.2_20240819安卓界面/YIMAO_C16_TFT_PIX64-user-native_SHARKLE_9_LL_SIN.pac')",
+      "Bash(Select-Object FullName)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\",\"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\build\\\\intermediates\\\\apk\\\\debug\\\\app-debug.apk\" | Select-Object FullName, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,2\\)}}, LastWriteTime)",
+      "PowerShell($adb = Get-Command adb -ErrorAction SilentlyContinue; if \\($adb\\) { \"adb: $\\($adb.Source\\)\"; adb devices } else { \"adb NO esta en el PATH\" })"
     ]
   }
 }

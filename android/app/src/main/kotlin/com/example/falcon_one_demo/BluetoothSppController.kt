@@ -35,21 +35,27 @@ class BluetoothSppController(private val context: Context) {
     var onDataReceived: ((ByteArray) -> Unit)? = null
 
     private var state: BtState = BtState.DISCONNECTED
-        set(value) {
-            field = value
-            mainHandler.post { onStateChange?.invoke(value, null) }
-        }
+
+    /**
+     * Único embudo de cambio de estado: actualiza el campo interno Y notifica a Flutter.
+     * Nunca llamar a onStateChange directamente — si no, el campo `state` se queda
+     * desincronizado y connect() rechaza reconexiones para siempre.
+     */
+    private fun updateState(value: BtState, error: String? = null) {
+        state = value
+        mainHandler.post { onStateChange?.invoke(value, error) }
+    }
 
     fun connect(macAddress: String = BODYCAM_MAC) {
         if (state == BtState.CONNECTING || state == BtState.CONNECTED) return
-        state = BtState.CONNECTING
+        updateState(BtState.CONNECTING)
 
         executor.execute {
             try {
                 Log.d(TAG, "Conectando a $macAddress…")
                 val device: BluetoothDevice = adapter?.getRemoteDevice(macAddress)
                     ?: run {
-                        mainHandler.post { onStateChange?.invoke(BtState.ERROR, "Bluetooth no disponible") }
+                        updateState(BtState.ERROR, "Bluetooth no disponible")
                         return@execute
                     }
 
@@ -62,23 +68,23 @@ class BluetoothSppController(private val context: Context) {
                 outputStream = s.outputStream
                 inputStream = s.inputStream
                 Log.d(TAG, "Conectado OK")
-                state = BtState.CONNECTED
+                updateState(BtState.CONNECTED)
                 startReading()
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permiso BLUETOOTH_CONNECT denegado: ${e.message}")
                 closeQuietly()
-                mainHandler.post { onStateChange?.invoke(BtState.ERROR, "Permiso BT denegado — otorgar en Ajustes") }
+                updateState(BtState.ERROR, "Permiso BT denegado — otorgar en Ajustes")
             } catch (e: IOException) {
                 Log.e(TAG, "Error conexión BT: ${e.message}")
                 closeQuietly()
-                mainHandler.post { onStateChange?.invoke(BtState.ERROR, e.message) }
+                updateState(BtState.ERROR, e.message)
             }
         }
     }
 
     fun disconnect() {
         closeQuietly()
-        state = BtState.DISCONNECTED
+        updateState(BtState.DISCONNECTED)
     }
 
     fun send(data: ByteArray): Boolean {
@@ -136,7 +142,8 @@ class BluetoothSppController(private val context: Context) {
                 } catch (e: IOException) {
                     if (state == BtState.CONNECTED) {
                         closeQuietly()
-                        mainHandler.post { onStateChange?.invoke(BtState.ERROR, "Conexión perdida") }
+                        // updateState actualiza el campo `state` -> connect() podrá reconectar.
+                        updateState(BtState.ERROR, "Conexión perdida")
                     }
                     break
                 }
