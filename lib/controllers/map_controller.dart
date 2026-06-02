@@ -279,16 +279,6 @@ class MapController extends GetxController with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _startRecordingAfterConnect() async {
-    try {
-      await Future.delayed(const Duration(milliseconds: 500));
-      final started = await _bodyCam.startRecording();
-      if (started) isRecording.value = true;
-    } catch (e) {
-      debugPrint('startRecording failed: $e');
-    }
-  }
-
   /// DIAGNOSTIC (2026-06-02): turn the bodycam's GPS on/off. We auto-call
   /// [bodyCamGpsOn] on connect to observe (via the BODYCAM-RAW/BODYCAM-GPS logs
   /// in _onBodyCamData) whether the bodycam emits any location over BT. Public
@@ -797,9 +787,11 @@ class MapController extends GetxController with WidgetsBindingObserver {
       bodyCamState.value = state.name;
       if (state == BtState.connected) {
         batteryLevel.value = 0;
-        _startRecordingAfterConnect();
-        _startStatusPoll();
-        bodyCamGpsOn(); // DIAGNOSTIC: see if the bodycam emits GPS over BT
+        // Solo conectar: NO se auto-graba ni auto-stream. Grabación/livestream/PTT
+        // los dispara únicamente la bodycam con sus botones físicos (BTN_* en
+        // _onBodyCamData). GPS de la bodycam descartado (gpsOn solo enciende el
+        // chip, no emite coords) — la ubicación sale del GPS del teléfono.
+        _startStatusPoll(); // batería/almacenamiento para el panel; no graba ni transmite
       }
       if (state == BtState.disconnected || state == BtState.error) {
         isRecording.value = false;

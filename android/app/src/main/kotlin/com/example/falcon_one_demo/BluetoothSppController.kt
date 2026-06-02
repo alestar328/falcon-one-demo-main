@@ -17,7 +17,7 @@ private const val TAG = "FalconBT"
 
 // Custom UUID matching BtServerService on bodycam — avoids conflict with native SPP firmware
 private val FALCON_UUID: UUID = UUID.fromString("FA1C0000-1337-4242-CAFE-DEADBEEF0001")
-const val BODYCAM_MAC = "40:45:DA:9E:5F:4E"
+const val BODYCAM_MAC = "40:45:DA:44:C8:9B"
 const val BODYCAM_NAME = "DSJ-ZXAN9A1"
 
 enum class BtState { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
