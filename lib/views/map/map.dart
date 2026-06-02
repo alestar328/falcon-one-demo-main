@@ -110,7 +110,12 @@ class MapView extends GetView<MapController> {
         child: Row(
           spacing: 10.0,
           children: [
-            // ── Left column: audio+bodycam row / photo+stream+glasses row ──
+            // ══ ButtonsPanel ══════════════════════════════════════════════
+            // The 6-button control grid (2 rows × 3), left column of the panel:
+            //   Row 1:  speaker  |  mic  |  bodycam
+            //   Row 2:  photo    |  SOS  |  glasses
+            // The SOS button (row 2, centre — directly below the mic) broadcasts
+            // the emergency / recording-signal warning.
             Expanded(
               child: Obx(() {
                 final state     = controller.bodyCamState.value;
@@ -124,11 +129,12 @@ class MapView extends GetView<MapController> {
                 return Column(
                   spacing: 8.0,
                   children: [
-                    // Row 1: speaker | mic | bodycam
+                    // ButtonsPanel · Row 1: speaker | mic | bodycam
                     Expanded(
                       child: Row(
                         spacing: 8.0,
                         children: [
+                          // [1] Speaker mute toggle.
                           Expanded(
                             child: Obx(() => PanelButton(
                               iconData: controller.isSpeakerMuted.value
@@ -137,6 +143,7 @@ class MapView extends GetView<MapController> {
                               onTap: () async => controller.toggleSpeakerMute(),
                             )),
                           ),
+                          // [2] Microphone mute toggle.
                           Expanded(
                             child: Obx(() => PanelButton(
                               iconData: controller.isMicrophoneMuted.value
@@ -145,6 +152,7 @@ class MapView extends GetView<MapController> {
                               onTap: () async => controller.toggleMicrophoneMute(),
                             )),
                           ),
+                          // [3] Bodycam connect / recording state.
                           Expanded(
                             child: PanelButton(
                               iconData: recording
@@ -161,11 +169,12 @@ class MapView extends GetView<MapController> {
                         ],
                       ),
                     ),
-                    // Row 2: photo | livestream | glasses
+                    // ButtonsPanel · Row 2: photo | SOS | glasses
                     Expanded(
                       child: Row(
                         spacing: 8.0,
                         children: [
+                          // [4] Take photo (bodycam).
                           Expanded(
                             child: PanelButton(
                               iconData: Icons.camera_alt,
@@ -173,11 +182,12 @@ class MapView extends GetView<MapController> {
                               onTap: connected ? controller.takePhoto : null,
                             ),
                           ),
-                          // Repurposed: this button no longer toggles a stream
-                          // overlay on the map. It broadcasts an emergency /
-                          // recording-signal warning to every other device in
-                          // the channel (simulating the bodycam signal). Tap
-                          // again to cancel (red while a broadcast is active).
+                          // [5] SOS — directly below the mic. Broadcasts an
+                          // emergency / recording-signal warning to every other
+                          // device in the channel and starts publishing this
+                          // phone's camera. Tap again to cancel (red while a
+                          // broadcast is active). Was the old livestream/stream
+                          // toggle, now repurposed as the SOS button.
                           Expanded(
                             child: Obx(() {
                               final active =
@@ -191,6 +201,7 @@ class MapView extends GetView<MapController> {
                               );
                             }),
                           ),
+                          // [6] Glasses connect / scan / record.
                           Expanded(
                             child: PanelButton(
                               iconData: glassesScanning
