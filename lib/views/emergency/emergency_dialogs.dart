@@ -8,12 +8,13 @@ import 'package:get/get.dart';
 enum EmergencyTreatment { own, external }
 
 /// Drives the full incoming-signal flow:
-///   1. "Tratar como: Propio / Externo" chooser.
-///   2a. Propio  → open the livestream straight away (no alarm).
-///   2b. Externo → warning popup with siren + "Recibir livestream" button.
+///   1. "Treat as: Own / External" chooser (dismissible — tap outside or the
+///      "Ignore" button to close without acting).
+///   2a. Own      → open the livestream straight away (no alarm).
+///   2b. External → warning popup with siren + "Receive livestream" button.
 ///
-/// [agentLabel] is the source shown on the external path (e.g. "Agente off-001"
-/// from the broadcaster payload, or the simulated "Agente 007"). [onOpenLivestream]
+/// [agentLabel] is the source shown on the external path (e.g. "Officer off-001"
+/// from the broadcaster payload, or the simulated "Officer 007"). [onOpenLivestream]
 /// opens the swipe livestream screen.
 Future<void> showEmergencyTreatmentFlow({
   required String agentLabel,
@@ -21,7 +22,7 @@ Future<void> showEmergencyTreatmentFlow({
 }) async {
   final treatment = await Get.dialog<EmergencyTreatment>(
     const _TreatAsDialog(),
-    barrierDismissible: false,
+    barrierDismissible: true,
   );
 
   if (treatment == EmergencyTreatment.own) {
@@ -37,7 +38,8 @@ Future<void> showEmergencyTreatmentFlow({
   }
 }
 
-/// "Tratar como:" — Externo (yellow) / Propio (blue).
+/// "Treat as:" — External (yellow) / Own (blue). Closable via the title "X",
+/// the "Ignore" action, or tapping outside (barrierDismissible).
 class _TreatAsDialog extends StatelessWidget {
   const _TreatAsDialog();
 
@@ -46,27 +48,40 @@ class _TreatAsDialog extends StatelessWidget {
     return AlertDialog(
       backgroundColor: const Color(0xFF1C1C1E),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      title: const Text(
-        'Tratar como:',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+      titlePadding: const EdgeInsets.fromLTRB(24, 16, 8, 0),
+      title: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'Treat as:',
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white54),
+            tooltip: 'Close',
+            onPressed: () => Get.back<EmergencyTreatment>(),
+          ),
+        ],
       ),
       content: const Text(
-        'Señal de grabación recibida.',
+        'Recording signal received.',
         style: TextStyle(color: Colors.white70),
       ),
       actionsAlignment: MainAxisAlignment.spaceEvenly,
       actions: [
         _choiceButton(
-          label: 'Externo',
-          color: const Color(0xFFFFC107), // amarillo
+          label: 'External',
+          color: const Color(0xFFFFC107), // yellow
           textColor: Colors.black,
           onTap: () => Get.back<EmergencyTreatment>(
             result: EmergencyTreatment.external,
           ),
         ),
         _choiceButton(
-          label: 'Propio',
-          color: const Color(0xFF1565C0), // azul
+          label: 'Own',
+          color: const Color(0xFF1565C0), // blue
           textColor: Colors.white,
           onTap: () => Get.back<EmergencyTreatment>(
             result: EmergencyTreatment.own,
@@ -99,7 +114,7 @@ class _TreatAsDialog extends StatelessWidget {
 }
 
 /// External-emergency warning. Plays a looping siren while visible (started in
-/// [initState], stopped in [dispose]) and offers "Recibir livestream".
+/// [initState], stopped in [dispose]) and offers "Receive livestream".
 class _ExternalEmergencyDialog extends StatefulWidget {
   const _ExternalEmergencyDialog({
     required this.agentLabel,
@@ -154,13 +169,13 @@ class _ExternalEmergencyDialogState extends State<_ExternalEmergencyDialog> {
           Icon(Icons.warning_amber_rounded, color: Color(0xFFFFC107), size: 28),
           SizedBox(width: 10),
           Text(
-            'Emergencia',
+            'Emergency',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
           ),
         ],
       ),
       content: Text(
-        '${widget.agentLabel} - estado: Emergencia',
+        '${widget.agentLabel} — status: Emergency',
         style: const TextStyle(
           color: Colors.white,
           fontSize: 16,
@@ -172,7 +187,7 @@ class _ExternalEmergencyDialogState extends State<_ExternalEmergencyDialog> {
         TextButton(
           onPressed: () => Get.back<void>(),
           child: const Text(
-            'Descartar',
+            'Dismiss',
             style: TextStyle(color: Colors.white54),
           ),
         ),
@@ -186,7 +201,7 @@ class _ExternalEmergencyDialogState extends State<_ExternalEmergencyDialog> {
           ),
           icon: const Icon(Icons.sensors),
           label: const Text(
-            'Recibir livestream',
+            'Receive livestream',
             style: TextStyle(fontWeight: FontWeight.w700),
           ),
           onPressed: () async {

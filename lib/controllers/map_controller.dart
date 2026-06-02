@@ -46,7 +46,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
   // Label used when the recording signal arrives locally over BT and the
   // presenter treats it as "Externo": there is no real remote payload (it's our
   // own bodycam pretending to be another agent), so we show this simulated id.
-  static const String simulatedExternalAgentLabel = 'Agente 007';
+  static const String simulatedExternalAgentLabel = 'Officer 007';
 
   // Guards against stacking the emergency popup if a second signal arrives
   // while the first dialog is still open.
@@ -921,7 +921,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
         service.consumeEmergency();
         final officer = signal.officer.trim();
         _showEmergencyFlow(
-          officer.isNotEmpty ? 'Agente $officer' : simulatedExternalAgentLabel,
+          officer.isNotEmpty ? 'Officer $officer' : simulatedExternalAgentLabel,
         );
       },
     );
@@ -953,8 +953,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
       await service.broadcastEmergencyCancel(officer: officerCode);
       emergencyBroadcastActive.value = false;
       _safeSnackBar(
-        'Emergencia',
-        'Señal cancelada',
+        'Emergency',
+        'Signal cancelled',
         backgroundColor: const Color(0xFF424242),
         colorText: Colors.white,
       );
@@ -962,8 +962,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
       await service.broadcastEmergency(officer: officerCode);
       emergencyBroadcastActive.value = true;
       _safeSnackBar(
-        'Emergencia',
-        'Señal enviada a los dispositivos conectados',
+        'Emergency',
+        'Signal sent to connected devices',
         backgroundColor: const Color(0xFFB71C1C),
         colorText: Colors.white,
       );
