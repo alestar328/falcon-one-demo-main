@@ -183,9 +183,7 @@ class MapView extends GetView<MapController> {
                               final active =
                                   controller.emergencyBroadcastActive.value;
                               return PanelButton(
-                                iconData: active
-                                    ? Icons.sensors_off
-                                    : Icons.sensors,
+                                iconData: Icons.sos,
                                 iconColor:
                                     active ? Colors.red : Colors.white,
                                 onTap: () async =>
