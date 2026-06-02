@@ -208,6 +208,12 @@ class CallService extends GetxService {
   // local agent's livestream). Independent of the bodycam (uid 9001).
   final RxBool _isPublishingCamera = false.obs;
 
+  // Set to a remote AGENT's uid (never the bodycam) the moment its video stops
+  // — the publisher muted/stopped it or went offline. The livestream WATCH view
+  // watches this to show a "Signal cut" notice over the frozen last frame.
+  // Reset to null when that uid's video resumes.
+  final Rxn<int> _remoteVideoStopped = Rxn<int>();
+
   // Latest emergency signal received from another agent over the data stream.
   // Consumers (MapController) react and then clear it via [consumeEmergency].
   final Rxn<EmergencySignal> _incomingEmergency = Rxn<EmergencySignal>();
@@ -243,10 +249,26 @@ class CallService extends GetxService {
     final engine = _engine;
     if (engine == null) return;
     try {
+      await _useRearCamera(engine);
       await engine.startPreview();
     } catch (e, st) {
       debugPrint('CallService: startLocalPreview error: $e');
       debugPrint('$st');
+    }
+  }
+
+  /// Defaults the capture to the REAR camera (the scene-facing one — the
+  /// sensible default for a bodycam, not the selfie/face camera). The user can
+  /// still flip with [switchCamera].
+  Future<void> _useRearCamera(RtcEngine engine) async {
+    try {
+      await engine.setCameraCapturerConfiguration(
+        const CameraCapturerConfiguration(
+          cameraDirection: CameraDirection.cameraRear,
+        ),
+      );
+    } catch (e) {
+      debugPrint('CallService: setCameraCapturerConfiguration error: $e');
     }
   }
 
@@ -270,6 +292,7 @@ class CallService extends GetxService {
     final engine = _engine;
     if (engine == null) return;
     try {
+      await _useRearCamera(engine);
       await engine.startPreview();
       await engine.muteLocalVideoStream(false);
       await engine.updateChannelMediaOptions(
@@ -333,6 +356,12 @@ class CallService extends GetxService {
   RxBool get isPublishingCameraRx => _isPublishingCamera;
   Rxn<EmergencySignal> get incomingEmergencyRx => _incomingEmergency;
   Rxn<EmergencyCancel> get incomingEmergencyCancelRx => _incomingEmergencyCancel;
+  Rxn<int> get remoteVideoStoppedRx => _remoteVideoStopped;
+
+  /// Last known location of a remote participant (from the always-on GPS data
+  /// stream), or null if we've never received one. Used to label where an
+  /// agent's livestream was when it got cut.
+  ParticipantLocation? remoteLocation(int uid) => _remoteLocations[uid];
 
   /// Clears the last consumed emergency so a later identical signal re-triggers.
   void consumeEmergency() => _incomingEmergency.value = null;
@@ -435,6 +464,10 @@ class CallService extends GetxService {
             _connectedUsersCount.value--;
           }
           if (remoteUid == bodyCamAgoraUid) _bodyCamVideoUid.value = null;
+          // An agent phone going offline = its livestream is cut.
+          if (remoteUid != bodyCamAgoraUid) {
+            _remoteVideoStopped.value = remoteUid;
+          }
           // Only drop the map marker on a graceful quit. A transient drop
           // (frequent while moving) keeps the last-known marker; the TTL sweep
           // removes it later if the peer never comes back.
@@ -446,14 +479,25 @@ class CallService extends GetxService {
         },
         onRemoteVideoStateChanged: (connection, remoteUid, state, reason, elapsed) {
           debugPrint('CallService: video state uid=$remoteUid state=$state reason=$reason');
-          if (remoteUid != bodyCamAgoraUid) return;
-          if (state == RemoteVideoState.remoteVideoStateDecoding ||
-              state == RemoteVideoState.remoteVideoStateStarting) {
-            _bodyCamVideoUid.value = remoteUid;
-          } else if (state == RemoteVideoState.remoteVideoStateFailed) {
-            _bodyCamVideoUid.value = null;
+          final live = state == RemoteVideoState.remoteVideoStateDecoding ||
+              state == RemoteVideoState.remoteVideoStateStarting;
+          if (remoteUid == bodyCamAgoraUid) {
+            if (live) {
+              _bodyCamVideoUid.value = remoteUid;
+            } else if (state == RemoteVideoState.remoteVideoStateFailed) {
+              _bodyCamVideoUid.value = null;
+            }
+            // STOPPED/FROZEN: don't clear — onUserOffline handles a real exit.
+            return;
           }
-          // STOPPED and FROZEN: don't clear — onUserOffline handles definitive exit
+          // Agent phone: track stop (publisher muted/stopped) vs resume, so the
+          // WATCH view can show a "Signal cut" notice when the feed dies.
+          if (state == RemoteVideoState.remoteVideoStateStopped ||
+              state == RemoteVideoState.remoteVideoStateFailed) {
+            _remoteVideoStopped.value = remoteUid;
+          } else if (live && _remoteVideoStopped.value == remoteUid) {
+            _remoteVideoStopped.value = null;
+          }
         },
         onLeaveChannel: (connection, stats) {
           _hasJoined.value = false;

@@ -931,23 +931,16 @@ class MapController extends GetxController with WidgetsBindingObserver {
       },
     );
 
-    // Remote cancellation: dismiss the alert popup + stop the siren, then show a
-    // closable "Signal cut at <time> — location: …" notice with the emitter's
-    // last position (reverse-geocoded to city/country when possible).
+    // Remote cancellation: dismiss the alert popup + stop the siren. The
+    // "Signal cut" notice itself is shown by the livestream WATCH view when the
+    // source's video actually stops (so it appears for whoever is watching the
+    // feed, regardless of how the emitter cut it).
     _incomingEmergencyCancelWorker ??= ever<EmergencyCancel?>(
       service.incomingEmergencyCancelRx,
       (cancel) {
         if (cancel == null) return;
         service.consumeEmergencyCancel();
         _dismissEmergency();
-        // Let the dismissed dialog finish closing before opening the notice.
-        Future<void>.delayed(const Duration(milliseconds: 200), () {
-          showSignalCutDialog(
-            time: cancel.timestamp,
-            latitude: cancel.latitude,
-            longitude: cancel.longitude,
-          );
-        });
       },
     );
   }

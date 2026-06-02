@@ -1,6 +1,7 @@
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:falcon_one_demo/controllers/map_controller.dart';
 import 'package:falcon_one_demo/data/call_service.dart';
+import 'package:falcon_one_demo/views/emergency/emergency_dialogs.dart';
 import 'package:falcon_one_demo/widgets/bodycam_stream_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -40,6 +41,11 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
   _CamState _state = _CamState.initializing;
   String _detail = '';
 
+  // Watch mode: fires when the source we're watching stops, to show the cut
+  // notice exactly once.
+  Worker? _sourceStoppedWorker;
+  bool _cutShown = false;
+
   bool get _isWatching => widget.watchUid != null;
 
   @override
@@ -75,6 +81,19 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     if (_isWatching) {
       // Just subscribe to the source's video; never publish our own camera.
       await call.watchRemoteVideo(widget.watchUid!);
+      // When the source's feed dies (publisher stops / goes offline), show a
+      // closable "Signal cut" notice over the frozen frame, with the emitter's
+      // last known location reverse-geocoded to city/country.
+      _sourceStoppedWorker = ever<int?>(call.remoteVideoStoppedRx, (uid) {
+        if (uid != widget.watchUid || _cutShown || !mounted) return;
+        _cutShown = true;
+        final loc = call.remoteLocation(widget.watchUid!);
+        showSignalCutDialog(
+          time: DateTime.now(),
+          latitude: loc?.latitude,
+          longitude: loc?.longitude,
+        );
+      });
     } else {
       // Opening this screen IS the "go live" gesture: if the bodycam isn't the
       // source, start publishing the phone camera to Agora right away. When the
@@ -119,6 +138,7 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
 
   @override
   void dispose() {
+    _sourceStoppedWorker?.dispose();
     // Stop sending and turn the camera off when leaving the screen. In watch
     // mode we never published, so there's nothing to stop.
     if (!_isWatching) {
