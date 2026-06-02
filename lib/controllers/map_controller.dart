@@ -10,6 +10,8 @@ import 'package:falcon_one_demo/models/w1_recording.dart';
 import 'package:falcon_one_demo/services/bodycam_service.dart';
 import 'package:falcon_one_demo/services/upload_service.dart';
 import 'package:falcon_one_demo/services/w1_service.dart';
+import 'package:falcon_one_demo/views/camera/camera_livestream_view.dart';
+import 'package:falcon_one_demo/views/emergency/emergency_dialogs.dart';
 import 'package:falcon_one_demo/widgets/w1_recording_import_sheet.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -35,6 +37,23 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Worker? _connectedUsersWorker;
   Worker? _bodyCamVideoWorker;
   Worker? _agoraConnectedWorker;
+  Worker? _incomingEmergencyWorker;
+  Worker? _incomingEmergencyCancelWorker;
+
+  // Officer code broadcast with an emergency signal so receivers can show the
+  // source. Mirrors UploadService's default ('off-001').
+  static const String officerCode = 'off-001';
+  // Label used when the recording signal arrives locally over BT and the
+  // presenter treats it as "Externo": there is no real remote payload (it's our
+  // own bodycam pretending to be another agent), so we show this simulated id.
+  static const String simulatedExternalAgentLabel = 'Agente 007';
+
+  // Guards against stacking the emergency popup if a second signal arrives
+  // while the first dialog is still open.
+  bool _emergencyDialogOpen = false;
+  // True while THIS device has an outstanding emergency broadcast it can cancel
+  // (drives the map button's emit ⇄ cancel toggle).
+  final RxBool emergencyBroadcastActive = false.obs;
 
   static const _kAgentSourceId = 'falcon-remote-agents';
   static const _kAgentPulseLayerId = 'falcon-agent-pulse';
@@ -177,6 +196,11 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _bodyCamVideoWorker = null;
     _agoraConnectedWorker?.dispose();
     _agoraConnectedWorker = null;
+    _incomingEmergencyWorker?.dispose();
+    _incomingEmergencyWorker = null;
+    _incomingEmergencyCancelWorker?.dispose();
+    _incomingEmergencyCancelWorker = null;
+    emergencyBroadcastActive.value = false;
     bodyCamLiveInAgora.value = false;
     agoraConnected.value = false;
     numUsers.value = 0;
@@ -262,10 +286,12 @@ class MapController extends GetxController with WidgetsBindingObserver {
     // Physical button push-notifications
     if (data.contains('BTN_REC_START')) {
       isRecording.value = true;
+      _onBodyCamRecordingSignal();
       return;
     }
     if (data.contains('BTN_REC_STOP')) {
       isRecording.value = false;
+      _dismissEmergency();
       return;
     }
     if (data.contains('BTN_STREAM_START')) {
@@ -284,7 +310,15 @@ class MapController extends GetxController with WidgetsBindingObserver {
         if (batMatch != null) batteryLevel.value = int.parse(batMatch.group(1)!);
 
         final recMatch = RegExp(r'"recording":(true|false)').firstMatch(data);
-        if (recMatch != null) isRecording.value = recMatch.group(1) == 'true';
+        if (recMatch != null) {
+          final rec = recMatch.group(1) == 'true';
+          // Fire the emergency flow only on the false→true edge so the 5 s
+          // STATUS poll doesn't re-open the popup every tick; dismiss it on the
+          // true→false edge (recording stopped = signal cancelled).
+          if (rec && !isRecording.value) _onBodyCamRecordingSignal();
+          if (!rec && isRecording.value) _dismissEmergency();
+          isRecording.value = rec;
+        }
 
         final streamMatch = RegExp(r'"streaming":(true|false)').firstMatch(data);
         if (streamMatch != null) {
@@ -766,6 +800,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _connectedUsersWorker?.dispose();
     _bodyCamVideoWorker?.dispose();
     _agoraConnectedWorker?.dispose();
+    _incomingEmergencyWorker?.dispose();
+    _incomingEmergencyCancelWorker?.dispose();
     _pulseTimer?.cancel();
     _pulseTimer = null;
     _staleRefreshTimer?.cancel();
@@ -855,13 +891,117 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
     bodyCamLiveInAgora.value = service.bodyCamVideoUidRx.value != null;
     _bodyCamVideoWorker ??= ever<int?>(service.bodyCamVideoUidRx, (uid) {
-      bodyCamLiveInAgora.value = uid != null;
+      final wasLive = bodyCamLiveInAgora.value;
+      final isLive = uid != null;
+      bodyCamLiveInAgora.value = isLive;
+      // The bodycam going live in Agora (UID 9001) is the RELIABLE "recording /
+      // stream signal" in this setup — the BT link is flaky and the bodycam
+      // joins Agora on its own, so we can't depend on BTN_REC_START arriving.
+      // Fire the same Propio/Externo flow on the null→live edge, and dismiss it
+      // (stopping the siren) when the bodycam drops.
+      if (isLive && !wasLive) {
+        _onBodyCamRecordingSignal();
+      } else if (!isLive && wasLive) {
+        _dismissEmergency();
+      }
     });
 
     agoraConnected.value = service.hasJoinedRx.value;
     _agoraConnectedWorker ??= ever<bool>(service.hasJoinedRx, (joined) {
       agoraConnected.value = joined;
     });
+
+    // Emergency signal received from another agent (their map button). The
+    // sender never receives its own data-stream message, so this only fires on
+    // the OTHER devices in the channel.
+    _incomingEmergencyWorker ??= ever<EmergencySignal?>(
+      service.incomingEmergencyRx,
+      (signal) {
+        if (signal == null) return;
+        service.consumeEmergency();
+        final officer = signal.officer.trim();
+        _showEmergencyFlow(
+          officer.isNotEmpty ? 'Agente $officer' : simulatedExternalAgentLabel,
+        );
+      },
+    );
+
+    // Remote cancellation: dismiss our popup + stop the siren.
+    _incomingEmergencyCancelWorker ??= ever<int>(
+      service.incomingEmergencyCancelRx,
+      (_) => _dismissEmergency(),
+    );
+  }
+
+  // ── Emergency / recording-signal flow ─────────────────────────────────────
+
+  /// Toggles the warning/recording broadcast to every other device in the
+  /// channel. Wired to the map "livestream" button. First tap emits the
+  /// emergency; a second tap cancels it (receivers dismiss the popup + silence
+  /// the siren). The sender never sees its own popup (Agora doesn't echo its
+  /// own data messages).
+  Future<void> triggerEmergencyBroadcast() async {
+    final ok = await ensureAgoraStarted();
+    if (!ok) {
+      debugPrint('triggerEmergencyBroadcast: Agora not available');
+      return;
+    }
+    final service = _ensureCallService();
+    if (service == null) return;
+
+    if (emergencyBroadcastActive.value) {
+      await service.broadcastEmergencyCancel(officer: officerCode);
+      emergencyBroadcastActive.value = false;
+      _safeSnackBar(
+        'Emergencia',
+        'Señal cancelada',
+        backgroundColor: const Color(0xFF424242),
+        colorText: Colors.white,
+      );
+    } else {
+      await service.broadcastEmergency(officer: officerCode);
+      emergencyBroadcastActive.value = true;
+      _safeSnackBar(
+        'Emergencia',
+        'Señal enviada a los dispositivos conectados',
+        backgroundColor: const Color(0xFFB71C1C),
+        colorText: Colors.white,
+      );
+    }
+  }
+
+  /// Dismisses an open emergency popup (which stops the looping siren via the
+  /// dialog's dispose). Used on remote cancellation and on local bodycam
+  /// REC_STOP. No-op if our emergency flow isn't currently showing.
+  void _dismissEmergency() {
+    if (!_emergencyDialogOpen) return;
+    if (Get.isDialogOpen ?? false) Get.back<void>();
+    _emergencyDialogOpen = false;
+  }
+
+  /// Local bodycam recording signal (physical button / STATUS edge). Treated as
+  /// an incoming emergency the presenter can classify as Propio/Externo.
+  void _onBodyCamRecordingSignal() {
+    _showEmergencyFlow(simulatedExternalAgentLabel);
+  }
+
+  /// Shows the "Tratar como: Propio/Externo" flow, guarding against stacking.
+  void _showEmergencyFlow(String agentLabel) {
+    if (_emergencyDialogOpen) return;
+    _emergencyDialogOpen = true;
+    showEmergencyTreatmentFlow(
+      agentLabel: agentLabel,
+      onOpenLivestream: _openLivestreamScreen,
+    ).whenComplete(() => _emergencyDialogOpen = false);
+  }
+
+  /// Opens the swipe livestream screen (same as the map's right-edge handle).
+  Future<void> _openLivestreamScreen() async {
+    await Get.to<void>(
+      () => const CameraLivestreamView(),
+      transition: Transition.rightToLeft,
+      duration: const Duration(milliseconds: 280),
+    );
   }
 
   Future<void> _setupAgentLayers(MapboxMap map) async {

@@ -93,6 +93,45 @@ class ParticipantLocation {
   }
 }
 
+/// An emergency/recording signal exchanged over the Agora data stream. Emitted
+/// when an agent presses the map livestream button; received by every OTHER
+/// device in the channel (Agora never echoes a sender its own data messages, so
+/// the trigger naturally never popups on the sender itself).
+class EmergencySignal {
+  const EmergencySignal({
+    required this.officer,
+    required this.uid,
+    required this.timestamp,
+  });
+
+  /// Officer code of the broadcasting agent (e.g. 'off-001'). Shown to the
+  /// receiver as the source of the emergency.
+  final String officer;
+  final int uid;
+  final DateTime timestamp;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'type': 'emergency',
+        'officer': officer,
+        'uid': uid,
+        'ts': timestamp.millisecondsSinceEpoch,
+      };
+
+  factory EmergencySignal.fromJson(Map<String, dynamic> json, {int? uid}) {
+    final dynamic ts = json['ts'];
+    final DateTime resolved = ts is int
+        ? DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true).toLocal()
+        : DateTime.now();
+    final dynamic rawUid = json['uid'];
+    return EmergencySignal(
+      officer: (json['officer'] ?? '').toString(),
+      uid: uid ??
+          (rawUid is int ? rawUid : int.tryParse(rawUid?.toString() ?? '') ?? 0),
+      timestamp: resolved,
+    );
+  }
+}
+
 class CallService extends GetxService {
   /// Manages the shared Agora channel, audio state, and per-user location updates.
   CallService({required AgoraCallConfig config}) : _config = config;
@@ -131,6 +170,14 @@ class CallService extends GetxService {
   // True while THIS phone is publishing its own camera to the channel (the
   // local agent's livestream). Independent of the bodycam (uid 9001).
   final RxBool _isPublishingCamera = false.obs;
+
+  // Latest emergency signal received from another agent over the data stream.
+  // Consumers (MapController) react and then clear it via [consumeEmergency].
+  final Rxn<EmergencySignal> _incomingEmergency = Rxn<EmergencySignal>();
+
+  // Bumped each time a remote agent cancels their emergency. Consumers watch it
+  // to dismiss the popup + stop the siren.
+  final RxInt _incomingEmergencyCancel = 0.obs;
 
   bool get isInitialized => _isInitialized;
   bool get hasJoinedChannel => _hasJoined.value;
@@ -233,6 +280,34 @@ class CallService extends GetxService {
   RxInt get connectedUsersCountRx => _connectedUsersCount;
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
   RxBool get isPublishingCameraRx => _isPublishingCamera;
+  Rxn<EmergencySignal> get incomingEmergencyRx => _incomingEmergency;
+  RxInt get incomingEmergencyCancelRx => _incomingEmergencyCancel;
+
+  /// Clears the last consumed emergency so a later identical signal re-triggers.
+  void consumeEmergency() => _incomingEmergency.value = null;
+
+  /// Broadcasts an emergency/recording signal to every other device in the
+  /// channel over the always-on data stream. The sender does NOT receive its
+  /// own message back from Agora, so its own popup never fires.
+  Future<void> broadcastEmergency({required String officer}) async {
+    final signal = EmergencySignal(
+      officer: officer,
+      uid: _currentUid ?? _config.localUid,
+      timestamp: DateTime.now(),
+    );
+    await _sendDataStreamJson(signal.toJson());
+  }
+
+  /// Broadcasts a cancellation of a previously sent emergency so every other
+  /// device dismisses the popup and silences the siren.
+  Future<void> broadcastEmergencyCancel({required String officer}) async {
+    await _sendDataStreamJson(<String, dynamic>{
+      'type': 'emergency_cancel',
+      'officer': officer,
+      'uid': _currentUid ?? _config.localUid,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
 
   /// Last time a data-stream message was received from each remote uid. Used by
   /// the map layer to flag peers that have gone silent (lost signal) and to
@@ -610,6 +685,12 @@ class CallService extends GetxService {
 
   /// Serialises the current location and pushes it onto the Agora data stream.
   Future<void> _sendLocationUpdate(ParticipantLocation location) async {
+    await _sendDataStreamJson(location.toJson());
+  }
+
+  /// Encodes [payload] as JSON and pushes it onto the shared Agora data stream.
+  /// Used for both location and emergency messages.
+  Future<void> _sendDataStreamJson(Map<String, dynamic> payload) async {
     final rtcEngine = _engine;
     final streamId = _locationStreamId;
 
@@ -618,15 +699,14 @@ class CallService extends GetxService {
     }
 
     try {
-      final payload = jsonEncode(location.toJson());
-      final bytes = Uint8List.fromList(utf8.encode(payload));
+      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
       await rtcEngine.sendStreamMessage(
         streamId: streamId,
         data: bytes,
         length: bytes.length,
       );
     } catch (error, stackTrace) {
-      debugPrint('CallService: failed to send location update $error');
+      debugPrint('CallService: failed to send data-stream message $error');
       debugPrint('$stackTrace');
     }
   }
@@ -649,6 +729,22 @@ class CallService extends GetxService {
       }
 
       final message = Map<String, dynamic>.from(decoded);
+
+      // Emergency/recording signal from another agent (map livestream button).
+      if (message['type'] == 'emergency') {
+        _incomingEmergency.value =
+            EmergencySignal.fromJson(message, uid: remoteUid);
+        debugPrint('CallService: emergency signal from uid=$remoteUid officer=${message['officer']}');
+        return;
+      }
+
+      // Cancellation of a previously broadcast emergency.
+      if (message['type'] == 'emergency_cancel') {
+        _incomingEmergencyCancel.value++;
+        debugPrint('CallService: emergency cancel from uid=$remoteUid');
+        return;
+      }
+
       if (message['type'] != 'location') {
         debugPrint('CallService[GPS-DBG]: unknown type "${message['type']}" from $remoteUid');
         return;
