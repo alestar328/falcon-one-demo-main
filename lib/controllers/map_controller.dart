@@ -129,6 +129,12 @@ class MapController extends GetxController with WidgetsBindingObserver {
   RxInt numSatellites = 0.obs;
   RxInt numUsers = 0.obs;
 
+  // DIAGNOSTIC (2026-06-02): whether the bodycam emits GPS over BT. We auto-send
+  // GPS_ON on connect and log every raw line; [bodyCamGpsRaw] holds the last
+  // line that looks like GPS so it can be shown on screen. Remove this block
+  // once we know the bodycam's GPS format (or confirm it sends none).
+  final RxString bodyCamGpsRaw = ''.obs;
+
   final Battery _phoneBattery = Battery();
   StreamSubscription<BatteryState>? _phoneBatterySub;
 
@@ -283,7 +289,43 @@ class MapController extends GetxController with WidgetsBindingObserver {
     }
   }
 
+  /// DIAGNOSTIC (2026-06-02): turn the bodycam's GPS on/off. We auto-call
+  /// [bodyCamGpsOn] on connect to observe (via the BODYCAM-RAW/BODYCAM-GPS logs
+  /// in _onBodyCamData) whether the bodycam emits any location over BT. Public
+  /// so it can be wired to a button. Drop the auto-call if it proves noisy.
+  Future<void> bodyCamGpsOn() async {
+    try {
+      await Future.delayed(const Duration(milliseconds: 700));
+      final ok = await _bodyCam.gpsOn();
+      debugPrint('BODYCAM-GPS: sent GPS_ON (ack=$ok)');
+    } catch (e) {
+      debugPrint('bodyCamGpsOn error: $e');
+    }
+  }
+
+  Future<void> bodyCamGpsOff() async {
+    try {
+      await _bodyCam.gpsOff();
+      debugPrint('BODYCAM-GPS: sent GPS_OFF');
+    } catch (e) {
+      debugPrint('bodyCamGpsOff error: $e');
+    }
+  }
+
   void _onBodyCamData(String data) {
+    // ── GPS DIAGNOSTIC (2026-06-02) ───────────────────────────────────────────
+    // Dump every raw line so we can see exactly what the bodycam sends (visible
+    // in `flutter run`). If a line looks like GPS (NMEA $GP/$GN sentence, or
+    // contains lat/lng/satellite keywords), flag it loudly and surface the last
+    // one via [bodyCamGpsRaw]. Remove once the GPS format is known.
+    debugPrint('BODYCAM-RAW: ${data.trim()}');
+    final looksLikeGps = RegExp(r'\$G[PNLA]', caseSensitive: false).hasMatch(data) ||
+        RegExp(r'lat|lon|lng|gps|satellite', caseSensitive: false).hasMatch(data);
+    if (looksLikeGps) {
+      debugPrint('BODYCAM-GPS: ${data.trim()}');
+      bodyCamGpsRaw.value = data.trim();
+    }
+
     // Physical button push-notifications
     if (data.contains('BTN_REC_START')) {
       isRecording.value = true;
@@ -757,6 +799,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
         batteryLevel.value = 0;
         _startRecordingAfterConnect();
         _startStatusPoll();
+        bodyCamGpsOn(); // DIAGNOSTIC: see if the bodycam emits GPS over BT
       }
       if (state == BtState.disconnected || state == BtState.error) {
         isRecording.value = false;

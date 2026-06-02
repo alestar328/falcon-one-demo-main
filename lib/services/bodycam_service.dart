@@ -64,6 +64,17 @@ class BodyCamService {
     return await _method.invokeMethod<bool>('sendRaw', {'data': data}) ?? false;
   }
 
+  /// Turns the bodycam's onboard GPS on/off. Mirrors the firmware's
+  /// GPS_ON / GPS_OFF commands. (DIAGNOSTIC: used to check whether the bodycam
+  /// emits any GPS data back over BT — see MapController._onBodyCamData raw log.)
+  Future<bool> gpsOn() async {
+    return await _method.invokeMethod<bool>('sendRaw', {'data': 'GPS_ON\n'}) ?? false;
+  }
+
+  Future<bool> gpsOff() async {
+    return await _method.invokeMethod<bool>('sendRaw', {'data': 'GPS_OFF\n'}) ?? false;
+  }
+
   Future<bool> startStream() async {
     return await _method.invokeMethod<bool>('sendRaw', {'data': 'STREAM_START\n'}) ?? false;
   }

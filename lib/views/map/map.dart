@@ -320,6 +320,30 @@ class MapView extends GetView<MapController> {
                         ],
                       );
                     }),
+                    // DIAGNOSTIC (2026-06-02): last GPS-looking line received
+                    // from the bodycam over BT. Stays hidden until/unless the
+                    // bodycam actually emits something. Temporary — remove with
+                    // the GPS diagnostic in MapController._onBodyCamData.
+                    Obx(() {
+                      final raw = controller.bodyCamGpsRaw.value;
+                      if (raw.isEmpty) return const SizedBox.shrink();
+                      return Row(
+                        spacing: 10.0,
+                        children: [
+                          const Icon(Icons.my_location,
+                              size: 16, color: Colors.amber),
+                          Expanded(
+                            child: Text(
+                              raw,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.amber, fontSize: 10),
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
                     const GlassesStatusBanner(),
                   ],
                 ),
