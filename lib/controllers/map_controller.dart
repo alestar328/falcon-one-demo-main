@@ -920,8 +920,11 @@ class MapController extends GetxController with WidgetsBindingObserver {
         if (signal == null) return;
         service.consumeEmergency();
         final officer = signal.officer.trim();
+        // signal.uid is the emitting agent's Agora uid — that's the camera the
+        // receiver should watch, not its own.
         _showEmergencyFlow(
           officer.isNotEmpty ? 'Officer $officer' : simulatedExternalAgentLabel,
+          sourceUid: signal.uid,
         );
       },
     );
@@ -951,6 +954,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
     if (emergencyBroadcastActive.value) {
       await service.broadcastEmergencyCancel(officer: officerCode);
+      // Stop publishing our camera once the emergency is cancelled.
+      await service.stopCameraPublish(stopPreview: true);
       emergencyBroadcastActive.value = false;
       _safeSnackBar(
         'Emergency',
@@ -959,6 +964,9 @@ class MapController extends GetxController with WidgetsBindingObserver {
         colorText: Colors.white,
       );
     } else {
+      // Start publishing this phone's camera so receivers can watch our feed,
+      // then announce the emergency carrying our uid as the source.
+      await service.startCameraPublish();
       await service.broadcastEmergency(officer: officerCode);
       emergencyBroadcastActive.value = true;
       _safeSnackBar(
@@ -979,26 +987,35 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _emergencyDialogOpen = false;
   }
 
-  /// Local bodycam recording signal (physical button / STATUS edge). Treated as
-  /// an incoming emergency the presenter can classify as Propio/Externo.
+  /// Local bodycam recording signal (physical button / STATUS edge). The source
+  /// is always the bodycam (Agora UID 9001), so the livestream shows the bodycam
+  /// feed — not this phone's own camera.
   void _onBodyCamRecordingSignal() {
-    _showEmergencyFlow(simulatedExternalAgentLabel);
+    _showEmergencyFlow(
+      simulatedExternalAgentLabel,
+      sourceUid: CallService.bodyCamAgoraUid,
+    );
   }
 
-  /// Shows the "Tratar como: Propio/Externo" flow, guarding against stacking.
-  void _showEmergencyFlow(String agentLabel) {
+  /// Shows the "Treat as: Own/External" flow, guarding against stacking.
+  /// [sourceUid] is the Agora uid whose video to show if the presenter opens the
+  /// livestream: 9001 = bodycam, any other uid = the emitting agent's phone.
+  void _showEmergencyFlow(String agentLabel, {required int sourceUid}) {
     if (_emergencyDialogOpen) return;
     _emergencyDialogOpen = true;
     showEmergencyTreatmentFlow(
       agentLabel: agentLabel,
-      onOpenLivestream: _openLivestreamScreen,
+      onOpenLivestream: () => _openLivestreamScreen(watchUid: sourceUid),
     ).whenComplete(() => _emergencyDialogOpen = false);
   }
 
-  /// Opens the swipe livestream screen (same as the map's right-edge handle).
-  Future<void> _openLivestreamScreen() async {
+  /// Opens the livestream screen. With [watchUid] it renders that remote
+  /// source's video (bodycam 9001 or an agent's phone) instead of going live
+  /// with this phone's own camera; without it, it's the publish-mode screen
+  /// (same as the map's right-edge handle).
+  Future<void> _openLivestreamScreen({int? watchUid}) async {
     await Get.to<void>(
-      () => const CameraLivestreamView(),
+      () => CameraLivestreamView(watchUid: watchUid),
       transition: Transition.rightToLeft,
       duration: const Duration(milliseconds: 280),
     );
@@ -1154,7 +1171,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
             'uid': entry.key,
             'stale': isStale,
             'label': isStale
-                ? 'Última conexión: ${_formatClock(seenAt ?? entry.value.timestamp)}'
+                ? 'Last seen: ${_formatClock(seenAt ?? entry.value.timestamp)}'
                 : '',
           },
         });

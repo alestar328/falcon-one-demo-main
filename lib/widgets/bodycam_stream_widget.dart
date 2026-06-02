@@ -19,13 +19,13 @@ class BodyCamStreamWidget extends StatelessWidget {
         : null;
 
     if (callService == null) {
-      return _placeholder('Agora no inicializado');
+      return _placeholder('Agora not initialized');
     }
 
     return Obx(() {
       final uid = callService.bodyCamVideoUidRx.value;
       if (uid == null) {
-        return _placeholder('Sin señal de video');
+        return _placeholder('No video signal');
       }
       return ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),

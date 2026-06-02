@@ -262,6 +262,19 @@ class CallService extends GetxService {
     }
   }
 
+  /// Ensures we're subscribed to a specific remote participant's video so we
+  /// can render it — e.g. when opening the livestream to watch the agent (or
+  /// bodycam) that raised an emergency, rather than our own camera.
+  Future<void> watchRemoteVideo(int uid) async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.muteRemoteVideoStream(uid: uid, mute: false);
+    } catch (e) {
+      debugPrint('CallService: watchRemoteVideo($uid) error: $e');
+    }
+  }
+
   /// Flips between front and back camera while previewing/publishing.
   Future<void> switchCamera() async {
     try {

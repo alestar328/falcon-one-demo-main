@@ -299,7 +299,7 @@ class MapView extends GetView<MapController> {
                                 : Colors.white38,
                           ),
                           Text(
-                            connected ? 'Bodycam' : 'Sin bodycam',
+                            connected ? 'Bodycam' : 'No bodycam',
                             style: TextStyle(
                               color: connected
                                   ? Colors.greenAccent

@@ -6,20 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// Full-screen livestream view.
+/// Full-screen livestream view, with two modes:
 ///
-/// Reached by swiping right-to-left from the main map ([MapView]). Shows live
-/// video and lets the agent publish their phone camera to the Agora channel:
-///   • If the bodycam (Agora UID 9001) is live, its video is shown — the
-///     bodycam is the source of truth when connected.
-///   • Otherwise the phone's own camera is previewed locally, and the
-///     livestream button publishes it to the channel so other agents can watch.
+/// • PUBLISH mode (default — reached by swiping right-to-left from the map):
+///   shows live video and lets the agent publish their own phone camera. If the
+///   bodycam (Agora UID 9001) is live it's shown as the source of truth;
+///   otherwise the phone's own camera is previewed and can be published.
+///
+/// • WATCH mode ([watchUid] != null — opened from an incoming emergency popup):
+///   renders the video of the agent/bodycam that raised the signal (their Agora
+///   uid) WITHOUT publishing this phone's camera. uid 9001 = the bodycam, any
+///   other uid = another agent's phone. This is what differentiates whether the
+///   signal came from a phone or from the bodycam.
 ///
 /// Saving the stream as incident evidence (Nexus / Agora Cloud Recording) is
 /// handled server-side and wired separately; this screen only drives the live
 /// transport.
 class CameraLivestreamView extends StatefulWidget {
-  const CameraLivestreamView({super.key});
+  const CameraLivestreamView({super.key, this.watchUid});
+
+  /// When non-null, render this remote participant's video instead of going
+  /// live with our own camera. 9001 = bodycam, anything else = another phone.
+  final int? watchUid;
 
   @override
   State<CameraLivestreamView> createState() => _CameraLivestreamViewState();
@@ -32,6 +40,8 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
   _CamState _state = _CamState.initializing;
   String _detail = '';
 
+  bool get _isWatching => widget.watchUid != null;
+
   @override
   void initState() {
     super.initState();
@@ -39,30 +49,39 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
   }
 
   Future<void> _prepare() async {
-    final status = await Permission.camera.request();
-    if (!status.isGranted) {
-      setState(() {
-        _state = _CamState.noPermission;
-        _detail = 'Permiso de cámara denegado';
-      });
-      return;
+    // WATCH mode renders a remote source — no local camera capture, so no
+    // camera permission needed. PUBLISH mode needs the camera.
+    if (!_isWatching) {
+      final status = await Permission.camera.request();
+      if (!status.isGranted) {
+        setState(() {
+          _state = _CamState.noPermission;
+          _detail = 'Camera permission denied';
+        });
+        return;
+      }
     }
 
     final call = Get.isRegistered<CallService>() ? Get.find<CallService>() : null;
     if (call == null || !call.isInitialized) {
       setState(() {
         _state = _CamState.noAgora;
-        _detail = 'Conexión Agora no disponible';
+        _detail = 'Agora connection unavailable';
       });
       return;
     }
     _call = call;
 
-    // Opening this screen IS the "go live" gesture: if the bodycam isn't the
-    // source, start publishing the phone camera to Agora right away. When the
-    // bodycam is live it's the source of truth, so we don't publish the phone.
-    if (!call.bodyCamVideoActive) {
-      await call.startCameraPublish();
+    if (_isWatching) {
+      // Just subscribe to the source's video; never publish our own camera.
+      await call.watchRemoteVideo(widget.watchUid!);
+    } else {
+      // Opening this screen IS the "go live" gesture: if the bodycam isn't the
+      // source, start publishing the phone camera to Agora right away. When the
+      // bodycam is live it's the source of truth, so we don't publish the phone.
+      if (!call.bodyCamVideoActive) {
+        await call.startCameraPublish();
+      }
     }
     if (!mounted) return;
     setState(() => _state = _CamState.ready);
@@ -100,8 +119,11 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
 
   @override
   void dispose() {
-    // Stop sending and turn the camera off when leaving the screen.
-    _call?.stopCameraPublish(stopPreview: true);
+    // Stop sending and turn the camera off when leaving the screen. In watch
+    // mode we never published, so there's nothing to stop.
+    if (!_isWatching) {
+      _call?.stopCameraPublish(stopPreview: true);
+    }
     super.dispose();
   }
 
@@ -121,8 +143,11 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
             _buildVideoArea(),
             _buildTopBar(),
             _buildBackHint(),
-            if (_state == _CamState.ready) _buildControls(),
-            if (_state == _CamState.ready) _buildLiveBadge(),
+            // Publish controls + LIVE badge only make sense when we're the
+            // source. In watch mode we show a "viewing source" badge instead.
+            if (_state == _CamState.ready && !_isWatching) _buildControls(),
+            if (_state == _CamState.ready && !_isWatching) _buildLiveBadge(),
+            if (_state == _CamState.ready && _isWatching) _buildWatchBadge(),
           ],
         ),
       ),
@@ -134,7 +159,7 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
       case _CamState.initializing:
         return _centerInfo(
           const CircularProgressIndicator(color: Colors.white54),
-          'Abriendo cámara…',
+          _isWatching ? 'Connecting to source…' : 'Opening camera…',
         );
       case _CamState.noPermission:
         return _centerInfo(
@@ -149,7 +174,7 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
       case _CamState.error:
         return _centerInfo(
           const Icon(Icons.error_outline, color: Colors.redAccent, size: 40),
-          'Error de cámara\n$_detail',
+          'Camera error\n$_detail',
         );
       case _CamState.ready:
         return _buildPreview();
@@ -160,8 +185,27 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
   Widget _buildPreview() {
     final call = _call;
     if (call == null) return const SizedBox.shrink();
+
+    // WATCH mode: render the remote source that raised the signal.
+    if (_isWatching) {
+      final watchUid = widget.watchUid!;
+      // The bodycam (uid 9001) has its own widget (handles rotation + status).
+      if (watchUid == CallService.bodyCamAgoraUid) {
+        return const BodyCamStreamWidget(borderRadius: 0);
+      }
+      // Another agent's phone camera — render their remote Agora video.
+      return AgoraVideoView(
+        controller: VideoViewController.remote(
+          rtcEngine: call.engine,
+          canvas: VideoCanvas(uid: watchUid),
+          connection: RtcConnection(channelId: call.config.channelId),
+          useFlutterTexture: true,
+        ),
+      );
+    }
+
     return Obx(() {
-      // Bodycam is the source of truth whenever it's live in the channel.
+      // PUBLISH mode. Bodycam is the source of truth whenever it's live.
       if (call.bodyCamVideoUidRx.value != null) {
         return const BodyCamStreamWidget(borderRadius: 0);
       }
@@ -176,6 +220,39 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     });
   }
 
+  /// Badge shown in watch mode indicating we're viewing a remote source.
+  Widget _buildWatchBadge() {
+    final isBodycam = widget.watchUid == CallService.bodyCamAgoraUid;
+    return Positioned(
+      top: 0,
+      right: 12,
+      child: SafeArea(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.red,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.circle, color: Colors.white, size: 8),
+              const SizedBox(width: 4),
+              Text(
+                isBodycam ? 'LIVE · BODYCAM' : 'LIVE · OFFICER',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTopBar() {
     return Positioned(
       top: 0,
@@ -188,7 +265,7 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
             IconButton(
               onPressed: Get.back,
               icon: const Icon(Icons.chevron_left, color: Colors.white),
-              tooltip: 'Volver al mapa',
+              tooltip: 'Back to map',
             ),
             const Spacer(),
           ],
