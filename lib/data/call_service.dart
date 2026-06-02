@@ -208,6 +208,10 @@ class CallService extends GetxService {
   // local agent's livestream). Independent of the bodycam (uid 9001).
   final RxBool _isPublishingCamera = false.obs;
 
+  // Pending snapshot capture; completed by onSnapshotTaken with the saved file
+  // path (or null on failure).
+  Completer<String?>? _snapshotCompleter;
+
   // Set to a remote AGENT's uid (never the bodycam) the moment its video stops
   // — the publisher muted/stopped it or went offline. The livestream WATCH view
   // watches this to show a "Signal cut" notice over the frozen last frame.
@@ -334,6 +338,27 @@ class CallService extends GetxService {
     } catch (e) {
       debugPrint('CallService: watchRemoteVideo($uid) error: $e');
     }
+  }
+
+  /// Captures a single frame to [filePath] from the given Agora [uid]:
+  ///   • uid 0    → this phone's local camera,
+  ///   • uid 9001 → the bodycam livestream,
+  ///   • other    → another agent's camera.
+  /// Returns the saved file path on success, or null. The frame is grabbed from
+  /// the live video, so the source must be previewing/subscribed first.
+  Future<String?> takeSnapshot({required int uid, required String filePath}) async {
+    final engine = _engine;
+    if (engine == null) return null;
+    _snapshotCompleter = Completer<String?>();
+    try {
+      await engine.takeSnapshot(uid: uid, filePath: filePath);
+    } catch (e) {
+      debugPrint('CallService: takeSnapshot error: $e');
+      _snapshotCompleter = null;
+      return null;
+    }
+    return _snapshotCompleter!.future
+        .timeout(const Duration(seconds: 5), onTimeout: () => null);
   }
 
   /// Flips between front and back camera while previewing/publishing.
@@ -512,6 +537,16 @@ class CallService extends GetxService {
         },
         onError: (error, message) {
           debugPrint('CallService error: $error -> $message');
+        },
+        onSnapshotTaken:
+            (connection, uid, filePath, width, height, errCode) {
+          debugPrint(
+            'CallService: snapshot uid=$uid path=$filePath err=$errCode',
+          );
+          final completer = _snapshotCompleter;
+          if (completer != null && !completer.isCompleted) {
+            completer.complete(errCode == 0 ? filePath : null);
+          }
         },
         onStreamMessage:
             (connection, remoteUid, streamId, data, length, sentTs) {

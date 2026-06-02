@@ -1,5 +1,6 @@
 import 'package:falcon_one_demo/app.dart';
 import 'package:falcon_one_demo/mapbox_config.dart';
+import 'package:falcon_one_demo/services/photo_storage_service.dart';
 import 'package:falcon_one_demo/services/upload_service.dart';
 import 'package:falcon_one_demo/services/w1_service.dart';
 import 'package:falcon_one_demo/utils/call_foreground_task.dart';
@@ -46,6 +47,7 @@ Future<void> initializeServices() async {
 
   Get.put(W1Service(), permanent: true);
   Get.put(UploadService(), permanent: true);
+  Get.put(PhotoStorageService(), permanent: true);
 
   await Permission.locationWhenInUse.request();
 }

@@ -11,6 +11,7 @@ import 'package:falcon_one_demo/services/bodycam_service.dart';
 import 'package:falcon_one_demo/services/upload_service.dart';
 import 'package:falcon_one_demo/services/w1_service.dart';
 import 'package:falcon_one_demo/views/camera/camera_livestream_view.dart';
+import 'package:falcon_one_demo/views/camera/photo_capture_view.dart';
 import 'package:falcon_one_demo/views/emergency/emergency_dialogs.dart';
 import 'package:falcon_one_demo/widgets/w1_recording_import_sheet.dart';
 import 'package:file_picker/file_picker.dart';
@@ -1032,6 +1033,30 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Future<void> _openLivestreamScreen({int? watchUid}) async {
     await Get.to<void>(
       () => CameraLivestreamView(watchUid: watchUid),
+      transition: Transition.rightToLeft,
+      duration: const Duration(milliseconds: 280),
+    );
+  }
+
+  /// Opens the photo-capture screen (panel photo button). If the bodycam is live
+  /// in Agora, first asks whether to shoot with the bodycam or the phone; the
+  /// bodycam photo is a frame grabbed from its livestream onto this phone. With
+  /// no bodycam, goes straight to the phone camera.
+  Future<void> openPhotoCapture() async {
+    final ok = await ensureAgoraStarted();
+    if (!ok) {
+      debugPrint('openPhotoCapture: Agora not available');
+      return;
+    }
+    final service = _ensureCallService();
+    int? sourceUid;
+    if (service?.bodyCamVideoActive ?? false) {
+      final useBodycam = await showPhotoSourceDialog();
+      if (useBodycam == null) return; // cancelled
+      sourceUid = useBodycam ? CallService.bodyCamAgoraUid : null;
+    }
+    await Get.to<void>(
+      () => PhotoCaptureView(sourceUid: sourceUid),
       transition: Transition.rightToLeft,
       duration: const Duration(milliseconds: 280),
     );

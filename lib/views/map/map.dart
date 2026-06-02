@@ -174,12 +174,14 @@ class MapView extends GetView<MapController> {
                       child: Row(
                         spacing: 8.0,
                         children: [
-                          // [4] Take photo (bodycam).
+                          // [4] Take photo — opens the photo-capture screen.
+                          // Always enabled. If the bodycam is live, a chooser
+                          // asks bodycam vs phone; otherwise it's the phone cam.
                           Expanded(
                             child: PanelButton(
                               iconData: Icons.camera_alt,
-                              iconColor: connected ? Colors.white : Colors.white38,
-                              onTap: connected ? controller.takePhoto : null,
+                              iconColor: Colors.white,
+                              onTap: () async => controller.openPhotoCapture(),
                             ),
                           ),
                           // [5] SOS — directly below the mic. Broadcasts an

@@ -56,4 +56,24 @@ class UploadService {
       client.close();
     }
   }
+
+  /// STUB — uploads a captured photo to the incidents backend.
+  ///
+  /// The real endpoint / field contract for images is owned by the server dev
+  /// and not defined yet, so this does NOT hit the network. It validates the
+  /// file and returns a synthetic success so the UI flow (capture → send) can be
+  /// wired and tested. Replace the body with a real multipart POST once the
+  /// photo endpoint is specified.
+  Future<UploadResult> uploadPhoto(File file, Map<String, dynamic> metadata) async {
+    if (!await file.exists()) {
+      return UploadResult.failure(httpStatus: null, message: 'File does not exist');
+    }
+    // TODO(server): real photo upload once the endpoint/field is defined.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    return UploadResult.success(
+      httpStatus: 200,
+      id: 'stub-${DateTime.now().millisecondsSinceEpoch}',
+      status: 'STUBBED (photo endpoint pending)',
+    );
+  }
 }
