@@ -12,7 +12,9 @@ import 'package:permission_handler/permission_handler.dart';
 /// • PUBLISH mode (default — reached by swiping right-to-left from the map):
 ///   shows live video and lets the agent publish their own phone camera. If the
 ///   bodycam (Agora UID 9001) is live it's shown as the source of truth;
-///   otherwise the phone's own camera is previewed and can be published.
+///   otherwise the phone's own camera is PREVIEWED only. Opening the screen does
+///   NOT auto-go-live (disabled 2026-06-02): the user must tap the livestream
+///   button to start publishing. See the AUTO-GO-LIVE note in _prepare.
 ///
 /// • WATCH mode ([watchUid] != null — opened from an incoming emergency popup):
 ///   renders the video of the agent/bodycam that raised the signal (their Agora
@@ -95,11 +97,13 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
         );
       });
     } else {
-      // Opening this screen IS the "go live" gesture: if the bodycam isn't the
-      // source, start publishing the phone camera to Agora right away. When the
-      // bodycam is live it's the source of truth, so we don't publish the phone.
+      // ── AUTO-GO-LIVE: DISABLED (2026-06-02) ───────────────────────────────
+      // Opening this screen no longer starts the livestream automatically. We
+      // only PREVIEW the phone camera; the user must tap the livestream button
+      // (_toggleLivestream) to actually publish. To restore auto-go-live, swap
+      // startLocalPreview() back for startCameraPublish() here.
       if (!call.bodyCamVideoActive) {
-        await call.startCameraPublish();
+        await call.startLocalPreview();
       }
     }
     if (!mounted) return;
@@ -125,6 +129,8 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
       return;
     }
 
+    // Phone camera: this button is now the ONLY way to go live (auto-go-live on
+    // open was disabled 2026-06-02). Tap to start publishing, tap again to stop.
     if (call.isPublishingCamera) {
       await call.stopCameraPublish();
     } else {
