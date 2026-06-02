@@ -109,7 +109,12 @@
       "Bash(sed -n '1,60p' lib/src/widgets/video_track_renderer.dart)",
       "Bash(explorer.exe \"C:\\\\Users\\\\newge\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\livekit_client-2.7.0\")",
       "Bash(exit 0)",
-      "Bash(explorer.exe \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\")"
+      "Bash(explorer.exe \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\")",
+      "Bash(cat .git/rebase-merge/msgnum)",
+      "Bash(cat .git/rebase-merge/end)",
+      "Bash(cat .git/rebase-merge/amend)",
+      "Bash(cat .git/rebase-merge/stopped-sha)",
+      "Bash(flutter devices *)"
     ]
   }
 }
