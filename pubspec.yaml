@@ -21,6 +21,7 @@ dependencies:
   path_provider: ^2.1.5
   file_picker: ^8.1.7
   geolocator: ^14.0.2
+  geocoding: ^3.0.0
   flutter_foreground_task: ^9.1.0
   flutter_bluetooth_serial: ^0.4.0
   font_awesome_flutter: ^10.7.0

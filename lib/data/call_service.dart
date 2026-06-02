@@ -132,6 +132,43 @@ class EmergencySignal {
   }
 }
 
+/// Cancellation of a previously broadcast emergency. Carries the emitter's last
+/// known location (if available) and the time it cut the signal, so receivers
+/// can show a "Signal cut at <time> — location: …" notice.
+class EmergencyCancel {
+  const EmergencyCancel({
+    required this.officer,
+    required this.uid,
+    required this.timestamp,
+    this.latitude,
+    this.longitude,
+  });
+
+  final String officer;
+  final int uid;
+  final DateTime timestamp;
+  final double? latitude;
+  final double? longitude;
+
+  factory EmergencyCancel.fromJson(Map<String, dynamic> json, {int? uid}) {
+    final dynamic ts = json['ts'];
+    final DateTime resolved = ts is int
+        ? DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true).toLocal()
+        : DateTime.now();
+    final dynamic rawUid = json['uid'];
+    final dynamic lat = json['lat'];
+    final dynamic lng = json['lng'];
+    return EmergencyCancel(
+      officer: (json['officer'] ?? '').toString(),
+      uid: uid ??
+          (rawUid is int ? rawUid : int.tryParse(rawUid?.toString() ?? '') ?? 0),
+      timestamp: resolved,
+      latitude: lat is num ? lat.toDouble() : null,
+      longitude: lng is num ? lng.toDouble() : null,
+    );
+  }
+}
+
 class CallService extends GetxService {
   /// Manages the shared Agora channel, audio state, and per-user location updates.
   CallService({required AgoraCallConfig config}) : _config = config;
@@ -175,9 +212,10 @@ class CallService extends GetxService {
   // Consumers (MapController) react and then clear it via [consumeEmergency].
   final Rxn<EmergencySignal> _incomingEmergency = Rxn<EmergencySignal>();
 
-  // Bumped each time a remote agent cancels their emergency. Consumers watch it
-  // to dismiss the popup + stop the siren.
-  final RxInt _incomingEmergencyCancel = 0.obs;
+  // Set each time a remote agent cancels their emergency, carrying the emitter's
+  // last location + cut time. Consumers dismiss the popup, stop the siren, and
+  // show a "Signal cut" notice, then clear it via [consumeEmergencyCancel].
+  final Rxn<EmergencyCancel> _incomingEmergencyCancel = Rxn<EmergencyCancel>();
 
   bool get isInitialized => _isInitialized;
   bool get hasJoinedChannel => _hasJoined.value;
@@ -294,10 +332,13 @@ class CallService extends GetxService {
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
   RxBool get isPublishingCameraRx => _isPublishingCamera;
   Rxn<EmergencySignal> get incomingEmergencyRx => _incomingEmergency;
-  RxInt get incomingEmergencyCancelRx => _incomingEmergencyCancel;
+  Rxn<EmergencyCancel> get incomingEmergencyCancelRx => _incomingEmergencyCancel;
 
   /// Clears the last consumed emergency so a later identical signal re-triggers.
   void consumeEmergency() => _incomingEmergency.value = null;
+
+  /// Clears the last consumed cancellation so a later one re-triggers.
+  void consumeEmergencyCancel() => _incomingEmergencyCancel.value = null;
 
   /// Broadcasts an emergency/recording signal to every other device in the
   /// channel over the always-on data stream. The sender does NOT receive its
@@ -314,11 +355,14 @@ class CallService extends GetxService {
   /// Broadcasts a cancellation of a previously sent emergency so every other
   /// device dismisses the popup and silences the siren.
   Future<void> broadcastEmergencyCancel({required String officer}) async {
+    final loc = _localLocation.value;
     await _sendDataStreamJson(<String, dynamic>{
       'type': 'emergency_cancel',
       'officer': officer,
       'uid': _currentUid ?? _config.localUid,
       'ts': DateTime.now().millisecondsSinceEpoch,
+      if (loc != null) 'lat': loc.latitude,
+      if (loc != null) 'lng': loc.longitude,
     });
   }
 
@@ -753,7 +797,8 @@ class CallService extends GetxService {
 
       // Cancellation of a previously broadcast emergency.
       if (message['type'] == 'emergency_cancel') {
-        _incomingEmergencyCancel.value++;
+        _incomingEmergencyCancel.value =
+            EmergencyCancel.fromJson(message, uid: remoteUid);
         debugPrint('CallService: emergency cancel from uid=$remoteUid');
         return;
       }

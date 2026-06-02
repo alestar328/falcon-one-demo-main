@@ -1,5 +1,6 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:get/get.dart';
 
 /// How the receiving agent chooses to treat an incoming recording/emergency
@@ -209,6 +210,145 @@ class _ExternalEmergencyDialogState extends State<_ExternalEmergencyDialog> {
             Get.back<void>();
             await widget.onReceiveLivestream();
           },
+        ),
+      ],
+    );
+  }
+}
+
+/// Notice shown to a receiver when the emitting agent cuts the alert/livestream.
+/// Closable. Shows the cut time and the emitter's location, reverse-geocoded to
+/// "City, Country" when possible (falling back to raw coordinates).
+Future<void> showSignalCutDialog({
+  required DateTime time,
+  double? latitude,
+  double? longitude,
+}) {
+  return Get.dialog<void>(
+    _SignalCutDialog(time: time, latitude: latitude, longitude: longitude),
+    barrierDismissible: true,
+  );
+}
+
+class _SignalCutDialog extends StatefulWidget {
+  const _SignalCutDialog({
+    required this.time,
+    this.latitude,
+    this.longitude,
+  });
+
+  final DateTime time;
+  final double? latitude;
+  final double? longitude;
+
+  @override
+  State<_SignalCutDialog> createState() => _SignalCutDialogState();
+}
+
+class _SignalCutDialogState extends State<_SignalCutDialog> {
+  String? _place;
+  bool _resolving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolvePlace();
+  }
+
+  Future<void> _resolvePlace() async {
+    final lat = widget.latitude;
+    final lng = widget.longitude;
+    if (lat == null || lng == null) return;
+    setState(() => _resolving = true);
+    String? place;
+    try {
+      final placemarks = await placemarkFromCoordinates(lat, lng);
+      if (placemarks.isNotEmpty) {
+        final p = placemarks.first;
+        final city = (p.locality != null && p.locality!.isNotEmpty)
+            ? p.locality
+            : p.administrativeArea;
+        final parts = <String>[
+          if (city != null && city.isNotEmpty) city,
+          if (p.country != null && p.country!.isNotEmpty) p.country!,
+        ];
+        if (parts.isNotEmpty) place = parts.join(', ');
+      }
+    } catch (e) {
+      debugPrint('Reverse geocode failed: $e');
+    }
+    if (!mounted) return;
+    setState(() {
+      _place = place;
+      _resolving = false;
+    });
+  }
+
+  String get _timeStr {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final t = widget.time;
+    return '${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
+  }
+
+  String get _locationStr {
+    final lat = widget.latitude;
+    final lng = widget.longitude;
+    if (lat == null || lng == null) return 'unknown';
+    final coords =
+        '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+    if (_resolving) return '$coords  (resolving…)';
+    if (_place != null) return '$_place\n$coords';
+    return coords;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1C1C1E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      titlePadding: const EdgeInsets.fromLTRB(24, 16, 8, 0),
+      title: Row(
+        children: [
+          const Icon(Icons.signal_cellular_off,
+              color: Colors.white70, size: 24),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Signal cut',
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white54),
+            tooltip: 'Close',
+            onPressed: () => Get.back<void>(),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Signal cut at $_timeStr',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Location: $_locationStr',
+            style: const TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Get.back<void>(),
+          child: const Text('OK', style: TextStyle(color: Colors.white)),
         ),
       ],
     );

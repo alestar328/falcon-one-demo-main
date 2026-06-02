@@ -929,10 +929,24 @@ class MapController extends GetxController with WidgetsBindingObserver {
       },
     );
 
-    // Remote cancellation: dismiss our popup + stop the siren.
-    _incomingEmergencyCancelWorker ??= ever<int>(
+    // Remote cancellation: dismiss the alert popup + stop the siren, then show a
+    // closable "Signal cut at <time> — location: …" notice with the emitter's
+    // last position (reverse-geocoded to city/country when possible).
+    _incomingEmergencyCancelWorker ??= ever<EmergencyCancel?>(
       service.incomingEmergencyCancelRx,
-      (_) => _dismissEmergency(),
+      (cancel) {
+        if (cancel == null) return;
+        service.consumeEmergencyCancel();
+        _dismissEmergency();
+        // Let the dismissed dialog finish closing before opening the notice.
+        Future<void>.delayed(const Duration(milliseconds: 200), () {
+          showSignalCutDialog(
+            time: cancel.timestamp,
+            latitude: cancel.latitude,
+            longitude: cancel.longitude,
+          );
+        });
+      },
     );
   }
 
