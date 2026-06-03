@@ -344,7 +344,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Bodycam physical buttons (keycodes VERIFIED via logcat 2026-06-03):
+    // Bodycam physical buttons (keycodes VERIFIED via logcat 2026-06-03, x3):
+    //   • PTT button    = keycode 132 → toggles the livestream mic → BTN_PTT
     //   • SOS button    = keycode 133 → BodyCamServer LIVESTREAMS → sends BTN_STREAM_*
     //   • Record button = keycode 134 → BodyCamServer RECORDS      → sends BTN_REC_*
     // The bodycam ONLY livestreams on SOS (normal recording stays local on the
