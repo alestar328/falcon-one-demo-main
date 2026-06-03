@@ -48,6 +48,9 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
   Worker? _sourceStoppedWorker;
   bool _cutShown = false;
 
+  // Watch mode: whether we've silenced the source we're listening to.
+  bool _audioMuted = false;
+
   bool get _isWatching => widget.watchUid != null;
 
   @override
@@ -57,17 +60,20 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
   }
 
   Future<void> _prepare() async {
-    // WATCH mode renders a remote source — no local camera capture, so no
-    // camera permission needed. PUBLISH mode needs the camera.
+    // WATCH mode renders a remote source — no local capture, so no permissions
+    // needed. PUBLISH mode needs camera + microphone (the livestream now carries
+    // the agent's voice, so the mic must be granted to broadcast audio).
     if (!_isWatching) {
-      final status = await Permission.camera.request();
-      if (!status.isGranted) {
+      final camera = await Permission.camera.request();
+      if (!camera.isGranted) {
         setState(() {
           _state = _CamState.noPermission;
           _detail = 'Camera permission denied';
         });
         return;
       }
+      // Mic is best-effort: if denied we still go live, just without voice.
+      await Permission.microphone.request();
     }
 
     final call = Get.isRegistered<CallService>() ? Get.find<CallService>() : null;
@@ -81,8 +87,14 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     _call = call;
 
     if (_isWatching) {
-      // Just subscribe to the source's video; never publish our own camera.
+      // A receiver must be strictly receive-only — stop publishing camera+mic
+      // and turn mic capture OFF so our own voice/video can never leak into the
+      // stream we're only meant to be watching.
+      await call.ensureReceiveOnly();
+      // Just subscribe to the source's video + audio; never publish our own
+      // camera/mic. Unmute the source's audio so we hear it by default.
       await call.watchRemoteVideo(widget.watchUid!);
+      await call.setRemoteAudioMuted(uid: widget.watchUid!, muted: false);
       // When the source's feed dies (publisher stops / goes offline), show a
       // closable "Signal cut" notice over the frozen frame, with the emitter's
       // last known location reverse-geocoded to city/country.
@@ -142,13 +154,39 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     await _call?.switchCamera();
   }
 
+  /// WATCH mode: mute/unmute the audio of the source we're listening to.
+  Future<void> _toggleWatchAudio() async {
+    final call = _call;
+    if (call == null) return;
+    final next = !_audioMuted;
+    await call.setRemoteAudioMuted(uid: widget.watchUid!, muted: next);
+    setState(() => _audioMuted = next);
+  }
+
+  /// PUBLISH mode: mute/unmute our OUTGOING mic while live (broadcast voice).
+  Future<void> _toggleBroadcastMic() async {
+    final call = _call;
+    if (call == null) return;
+    // isPublishingAudio == true means mic is live → tap mutes it, and vice versa.
+    await call.setBroadcastMicMuted(call.isPublishingAudio);
+  }
+
   @override
   void dispose() {
     _sourceStoppedWorker?.dispose();
-    // Stop sending and turn the camera off when leaving the screen. In watch
-    // mode we never published, so there's nothing to stop.
+    final call = _call;
     if (!_isWatching) {
-      _call?.stopCameraPublish(stopPreview: true);
+      // Stop sending and turn the camera off when leaving the screen.
+      call?.stopCameraPublish(stopPreview: true);
+    } else if (call != null) {
+      // Stop pulling the watched source's audio on leave so it doesn't keep
+      // playing on the map (audio is on-demand now). For the bodycam, fall back
+      // to the panel's mute state instead of forcing it muted.
+      final uid = widget.watchUid!;
+      final restoreMuted = uid == CallService.bodyCamAgoraUid
+          ? call.isMicrophoneMuted
+          : true;
+      call.setRemoteAudioMuted(uid: uid, muted: restoreMuted);
     }
     super.dispose();
   }
@@ -174,6 +212,7 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
             if (_state == _CamState.ready && !_isWatching) _buildControls(),
             if (_state == _CamState.ready && !_isWatching) _buildLiveBadge(),
             if (_state == _CamState.ready && _isWatching) _buildWatchBadge(),
+            if (_state == _CamState.ready && _isWatching) _buildWatchControls(),
           ],
         ),
       ),
@@ -367,12 +406,54 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
               );
             }),
             const SizedBox(width: 28),
+            // Broadcast mic toggle. Only actionable while live (publishing or
+            // bodycam source); reflects whether our outgoing voice is on.
+            Obx(() {
+              final live = call.isPublishingCameraRx.value ||
+                  call.bodyCamVideoUidRx.value != null;
+              final micOn = call.isPublishingAudioRx.value;
+              return _circleButton(
+                icon: micOn ? Icons.mic : Icons.mic_off,
+                color: micOn ? Colors.white : Colors.redAccent,
+                size: 52,
+                iconSize: 24,
+                onTap: (live && call.isPublishingCameraRx.value)
+                    ? _toggleBroadcastMic
+                    : null,
+              );
+            }),
+            const SizedBox(width: 28),
             _circleButton(
               icon: Icons.cameraswitch,
               color: Colors.white,
               size: 52,
               iconSize: 24,
               onTap: _flipCamera,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// WATCH mode controls: a single listen/mute toggle so the receiver can
+  /// silence or restore the source's audio.
+  Widget _buildWatchControls() {
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        minimum: const EdgeInsets.only(bottom: 24),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _circleButton(
+              icon: _audioMuted ? Icons.volume_off : Icons.volume_up,
+              color: _audioMuted ? Colors.redAccent : Colors.white,
+              size: 60,
+              iconSize: 28,
+              onTap: _toggleWatchAudio,
             ),
           ],
         ),

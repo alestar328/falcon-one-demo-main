@@ -6,6 +6,7 @@ import 'package:battery_plus/battery_plus.dart';
 import 'package:falcon_one_demo/app_ui_keys.dart';
 import 'package:falcon_one_demo/data/call_service.dart';
 import 'package:falcon_one_demo/services/agora_launcher.dart';
+import 'package:falcon_one_demo/models/sos_notification.dart';
 import 'package:falcon_one_demo/models/w1_recording.dart';
 import 'package:falcon_one_demo/services/bodycam_service.dart';
 import 'package:falcon_one_demo/services/upload_service.dart';
@@ -18,6 +19,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 enum IncidentUploadUiPhase {
   idle,
@@ -55,6 +57,23 @@ class MapController extends GetxController with WidgetsBindingObserver {
   // True while THIS device has an outstanding emergency broadcast it can cancel
   // (drives the map button's emit ⇄ cancel toggle).
   final RxBool emergencyBroadcastActive = false.obs;
+
+  // ── SOS broadcast heartbeat ────────────────────────────────────────────────
+  // The emergency is re-broadcast on this interval while active, so a device
+  // that opens the app mid-emergency still receives it (data-stream messages are
+  // ephemeral and only reach already-connected peers). Same idea as the GPS
+  // heartbeat. The session's start time is reused so receivers dedupe repeats.
+  Timer? _emergencyHeartbeatTimer;
+  DateTime? _emergencyStartedAt;
+  static const Duration _emergencyHeartbeatInterval = Duration(seconds: 3);
+
+  // ── SOS notification centre ────────────────────────────────────────────────
+  // Every distinct SOS this device receives (deduped by session key) is kept
+  // here so the user sees a bell badge with the count and can review each alert
+  // (officer, GPS, date/time) and accept/close it — even if it arrived while
+  // they were elsewhere on the map.
+  final RxList<SosNotification> sosNotifications = <SosNotification>[].obs;
+  final Set<String> _seenSosKeys = <String>{};
 
   static const _kAgentSourceId = 'falcon-remote-agents';
   static const _kAgentPulseLayerId = 'falcon-agent-pulse';
@@ -207,6 +226,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _incomingEmergencyWorker = null;
     _incomingEmergencyCancelWorker?.dispose();
     _incomingEmergencyCancelWorker = null;
+    _stopEmergencyHeartbeat();
     emergencyBroadcastActive.value = false;
     bodyCamLiveInAgora.value = false;
     agoraConnected.value = false;
@@ -838,11 +858,59 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _agoraConnectedWorker?.dispose();
     _incomingEmergencyWorker?.dispose();
     _incomingEmergencyCancelWorker?.dispose();
+    _emergencyHeartbeatTimer?.cancel();
+    _emergencyHeartbeatTimer = null;
     _pulseTimer?.cancel();
     _pulseTimer = null;
     _staleRefreshTimer?.cancel();
     _staleRefreshTimer = null;
     super.onClose();
+  }
+
+  // ── SOS notification centre + my-location ──────────────────────────────────
+
+  /// Removes a notification from the centre. "Accept" and "Close" both dismiss
+  /// it (for now the alert is informational — accepting just acknowledges it).
+  void dismissSosNotification(SosNotification n) {
+    sosNotifications.removeWhere((e) => e.sessionKey == n.sessionKey);
+  }
+
+  /// Clears all SOS notifications at once.
+  void clearSosNotifications() => sosNotifications.clear();
+
+  /// Recenters the map on this device's own GPS position — the "my location"
+  /// button (like Google Maps). No-op until we have a fix.
+  Future<void> recenterOnSelf() async {
+    final map = mapboxMap;
+    if (map == null) return;
+    if (!incidentGpsReady.value) {
+      _safeSnackBar(
+        'Location',
+        'Waiting for GPS fix…',
+        backgroundColor: const Color(0xFF424242),
+        colorText: Colors.white,
+      );
+      return;
+    }
+    try {
+      await map.flyTo(
+        CameraOptions(
+          center: Point(
+            coordinates: Position(
+              incidentLongitude.value,
+              incidentLatitude.value,
+            ),
+          ),
+          zoom: 16.0,
+          pitch: 60.0,
+          padding:
+              MbxEdgeInsets(bottom: 200.0, top: 0.0, left: 0.0, right: 0.0),
+        ),
+        MapAnimationOptions(duration: 800),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('recenterOnSelf: $error\n$stackTrace');
+    }
   }
 
   Future<void> _refreshPhoneBattery() async {
@@ -922,7 +990,20 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
     numUsers.value = service.connectedUsersCountRx.value;
     _connectedUsersWorker ??= ever<int>(service.connectedUsersCountRx, (count) {
+      final joined = count > numUsers.value;
       numUsers.value = count;
+      // A new peer just joined while we have an active SOS — re-announce it
+      // straight away so they get alerted without waiting for the next
+      // heartbeat tick.
+      if (joined && emergencyBroadcastActive.value) {
+        final service = _callService;
+        if (service != null) {
+          unawaited(service.broadcastEmergency(
+            officer: officerCode,
+            startedAt: _emergencyStartedAt,
+          ));
+        }
+      }
     });
 
     bodyCamLiveInAgora.value = service.bodyCamVideoUidRx.value != null;
@@ -955,6 +1036,27 @@ class MapController extends GetxController with WidgetsBindingObserver {
       (signal) {
         if (signal == null) return;
         service.consumeEmergency();
+        // Heartbeat dedupe: the emitter re-broadcasts the SAME session every few
+        // seconds so late joiners get it. Only the FIRST time we see a session
+        // do we alert + log it; later repeats are ignored.
+        if (_seenSosKeys.contains(signal.sessionKey)) return;
+        _seenSosKeys.add(signal.sessionKey);
+
+        // Record it in the notification centre (officer, GPS, time) so it's
+        // reviewable later even if dismissed now.
+        sosNotifications.insert(
+          0,
+          SosNotification(
+            sessionKey: signal.sessionKey,
+            officer: signal.officer.trim(),
+            uid: signal.uid,
+            receivedAt: DateTime.now(),
+            emittedAt: signal.timestamp,
+            latitude: signal.latitude,
+            longitude: signal.longitude,
+          ),
+        );
+
         final officer = signal.officer.trim();
         // A signal from another phone is ALWAYS external — skip the Own/External
         // chooser and show the emergency popup (siren) directly. signal.uid is
@@ -998,6 +1100,7 @@ class MapController extends GetxController with WidgetsBindingObserver {
     if (service == null) return;
 
     if (emergencyBroadcastActive.value) {
+      _stopEmergencyHeartbeat();
       await service.broadcastEmergencyCancel(officer: officerCode);
       // Stop publishing our camera once the emergency is cancelled.
       await service.stopCameraPublish(stopPreview: true);
@@ -1009,10 +1112,21 @@ class MapController extends GetxController with WidgetsBindingObserver {
         colorText: Colors.white,
       );
     } else {
-      // Start publishing this phone's camera so receivers can watch our feed,
-      // then announce the emergency carrying our uid as the source.
+      // The livestream now carries voice — make sure camera + mic are granted
+      // before publishing, otherwise receivers get video without audio.
+      await Permission.camera.request();
+      await Permission.microphone.request();
+      // Start publishing this phone's camera + mic so receivers can watch AND
+      // hear our feed, then announce the emergency carrying our uid as source.
       await service.startCameraPublish();
-      await service.broadcastEmergency(officer: officerCode);
+      // One stable session start for this SOS — reused by every heartbeat so
+      // receivers dedupe. Then begin re-broadcasting so late joiners get it.
+      _emergencyStartedAt = DateTime.now();
+      await service.broadcastEmergency(
+        officer: officerCode,
+        startedAt: _emergencyStartedAt,
+      );
+      _startEmergencyHeartbeat();
       emergencyBroadcastActive.value = true;
       _safeSnackBar(
         'Emergency',
@@ -1021,6 +1135,30 @@ class MapController extends GetxController with WidgetsBindingObserver {
         colorText: Colors.white,
       );
     }
+  }
+
+  /// Periodically re-announces the active SOS so a device that opens the app
+  /// mid-emergency still receives it. Reuses [_emergencyStartedAt] so receivers
+  /// can tell repeats apart from new emergencies.
+  void _startEmergencyHeartbeat() {
+    _emergencyHeartbeatTimer?.cancel();
+    _emergencyHeartbeatTimer = Timer.periodic(
+      _emergencyHeartbeatInterval,
+      (_) {
+        final service = _callService;
+        if (service == null || !emergencyBroadcastActive.value) return;
+        unawaited(service.broadcastEmergency(
+          officer: officerCode,
+          startedAt: _emergencyStartedAt,
+        ));
+      },
+    );
+  }
+
+  void _stopEmergencyHeartbeat() {
+    _emergencyHeartbeatTimer?.cancel();
+    _emergencyHeartbeatTimer = null;
+    _emergencyStartedAt = null;
   }
 
   /// Dismisses an open emergency popup (which stops the looping siren via the

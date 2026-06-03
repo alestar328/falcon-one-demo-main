@@ -2,6 +2,7 @@ import 'package:falcon_one_demo/components/panel_button.dart';
 import 'package:falcon_one_demo/controllers/glasses_controller.dart';
 import 'package:falcon_one_demo/controllers/map_controller.dart';
 import 'package:falcon_one_demo/views/camera/camera_livestream_view.dart';
+import 'package:falcon_one_demo/views/emergency/sos_notifications_sheet.dart';
 import 'package:falcon_one_demo/widgets/glasses_status_banner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_liquid_glass/liquid_glass.dart';
@@ -27,9 +28,91 @@ class MapView extends GetView<MapController> {
     return Scaffold(
       body: Stack(children: [
         _buildMap(),
+        _buildTopRightControls(),
+        _buildMyLocationButton(),
         _buildButtonPanel(),
         _buildCameraSwipeHandle(),
       ]),
+    );
+  }
+
+  /// Top-right cluster: the SOS notification bell (with an unread count badge).
+  Widget _buildTopRightControls() {
+    return Positioned(
+      top: 0,
+      right: 12,
+      child: SafeArea(
+        child: Obx(() {
+          final count = controller.sosNotifications.length;
+          return GestureDetector(
+            onTap: () => showSosNotificationsSheet(controller),
+            child: Container(
+              width: 48,
+              height: 48,
+              decoration: const BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Icon(
+                    count > 0
+                        ? Icons.notifications_active
+                        : Icons.notifications_none,
+                    color: count > 0 ? const Color(0xFFFFC107) : Colors.white,
+                    size: 24,
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        constraints:
+                            const BoxConstraints(minWidth: 16, minHeight: 16),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE53935),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          count > 99 ? '99+' : '$count',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  /// "My location" button — recenters the map on the user's own GPS, like
+  /// Google Maps. Sits just above the control panel on the right.
+  Widget _buildMyLocationButton() {
+    return Positioned(
+      right: 20,
+      bottom: 280,
+      child: GestureDetector(
+        onTap: () => controller.recenterOnSelf(),
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: const BoxDecoration(
+            color: Colors.black54,
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.my_location, color: Colors.white, size: 24),
+        ),
+      ),
     );
   }
 
@@ -122,6 +205,13 @@ class MapView extends GetView<MapController> {
                 final recording = controller.isRecording.value;
                 final connected = state == 'connected';
 
+                // A bodycam counts as present if it's linked over Bluetooth OR
+                // live in Agora. The speaker/mic panel controls act on the
+                // bodycam's audio, so without one they have nothing to control:
+                // they're disabled (greyed) and effectively off.
+                final bodyCamPresent =
+                    connected || controller.bodyCamLiveInAgora.value;
+
                 final glassesConnected = glasses.isConnected.value;
                 final glassesRecording = glasses.isRecording.value;
                 final glassesScanning  = glasses.isScanning.value;
@@ -134,22 +224,33 @@ class MapView extends GetView<MapController> {
                       child: Row(
                         spacing: 8.0,
                         children: [
-                          // [1] Speaker mute toggle.
+                          // [1] Speaker route toggle — bodycam audio only.
+                          // Disabled (greyed) when no bodycam is present.
                           Expanded(
                             child: Obx(() => PanelButton(
                               iconData: controller.isSpeakerMuted.value
                                   ? Icons.volume_off
                                   : Icons.volume_up,
-                              onTap: () async => controller.toggleSpeakerMute(),
+                              iconColor:
+                                  bodyCamPresent ? null : Colors.white24,
+                              onTap: bodyCamPresent
+                                  ? () async => controller.toggleSpeakerMute()
+                                  : null,
                             )),
                           ),
-                          // [2] Microphone mute toggle.
+                          // [2] Bodycam audio listen toggle (mute/unmute the
+                          // bodycam's voice). Muted by default; disabled when no
+                          // bodycam is present.
                           Expanded(
                             child: Obx(() => PanelButton(
                               iconData: controller.isMicrophoneMuted.value
                                   ? Icons.mic_off
                                   : Icons.mic,
-                              onTap: () async => controller.toggleMicrophoneMute(),
+                              iconColor:
+                                  bodyCamPresent ? null : Colors.white24,
+                              onTap: bodyCamPresent
+                                  ? () async => controller.toggleMicrophoneMute()
+                                  : null,
                             )),
                           ),
                           // [3] Bodycam connect / recording state.

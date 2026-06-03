@@ -47,14 +47,18 @@ Future<void> showEmergencyTreatmentFlow({
 Future<void> _showExternalEmergency(
   String agentLabel,
   Future<void> Function() onOpenLivestream,
-) {
-  return Get.dialog<void>(
-    _ExternalEmergencyDialog(
-      agentLabel: agentLabel,
-      onReceiveLivestream: onOpenLivestream,
-    ),
+) async {
+  // The dialog just returns whether the receiver accepted. We open the
+  // livestream AFTER it has fully closed — navigating from inside the button's
+  // callback (Get.back + Get.to in the same tick) makes GetX swallow the push,
+  // which left the receiver on the map having to swipe in manually.
+  final accepted = await Get.dialog<bool>(
+    _ExternalEmergencyDialog(agentLabel: agentLabel),
     barrierDismissible: false,
   );
+  if (accepted == true) {
+    await onOpenLivestream();
+  }
 }
 
 /// "Treat as:" — External (yellow) / Own (blue). Closable via the title "X",
@@ -133,15 +137,13 @@ class _TreatAsDialog extends StatelessWidget {
 }
 
 /// External-emergency warning. Plays a looping siren while visible (started in
-/// [initState], stopped in [dispose]) and offers "Receive livestream".
+/// [initState], stopped in [dispose]) and offers to accept (view livestream) or
+/// dismiss. Returns `true` via [Get.back] when accepted, so the caller can open
+/// the livestream once the dialog has closed.
 class _ExternalEmergencyDialog extends StatefulWidget {
-  const _ExternalEmergencyDialog({
-    required this.agentLabel,
-    required this.onReceiveLivestream,
-  });
+  const _ExternalEmergencyDialog({required this.agentLabel});
 
   final String agentLabel;
-  final Future<void> Function() onReceiveLivestream;
 
   @override
   State<_ExternalEmergencyDialog> createState() =>
@@ -204,7 +206,7 @@ class _ExternalEmergencyDialogState extends State<_ExternalEmergencyDialog> {
       actionsAlignment: MainAxisAlignment.spaceBetween,
       actions: [
         TextButton(
-          onPressed: () => Get.back<void>(),
+          onPressed: () => Get.back<bool>(result: false),
           child: const Text(
             'Dismiss',
             style: TextStyle(color: Colors.white54),
@@ -220,14 +222,13 @@ class _ExternalEmergencyDialogState extends State<_ExternalEmergencyDialog> {
           ),
           icon: const Icon(Icons.sensors),
           label: const Text(
-            'Receive livestream',
+            'Accept & view livestream',
             style: TextStyle(fontWeight: FontWeight.w700),
           ),
-          onPressed: () async {
-            // Close the popup first (dispose stops the siren), then navigate.
-            Get.back<void>();
-            await widget.onReceiveLivestream();
-          },
+          // Just signal acceptance + close (dispose stops the siren). The caller
+          // opens the livestream once this dialog has fully popped, so the push
+          // isn't swallowed by GetX (which used to drop us back on the map).
+          onPressed: () => Get.back<bool>(result: true),
         ),
       ],
     );

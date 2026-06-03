@@ -102,19 +102,33 @@ class EmergencySignal {
     required this.officer,
     required this.uid,
     required this.timestamp,
+    this.latitude,
+    this.longitude,
   });
 
   /// Officer code of the broadcasting agent (e.g. 'off-001'). Shown to the
   /// receiver as the source of the emergency.
   final String officer;
   final int uid;
+
+  /// Time the SOS SESSION started. Stable across heartbeat re-broadcasts so
+  /// receivers can dedupe (uid + ts) and only alert once per emergency.
   final DateTime timestamp;
+
+  /// Emitter's location at the time of the SOS, if known.
+  final double? latitude;
+  final double? longitude;
+
+  /// Stable per-session key used to dedupe heartbeat repeats.
+  String get sessionKey => '$uid@${timestamp.millisecondsSinceEpoch}';
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'type': 'emergency',
         'officer': officer,
         'uid': uid,
         'ts': timestamp.millisecondsSinceEpoch,
+        if (latitude != null) 'lat': latitude,
+        if (longitude != null) 'lng': longitude,
       };
 
   factory EmergencySignal.fromJson(Map<String, dynamic> json, {int? uid}) {
@@ -123,11 +137,15 @@ class EmergencySignal {
         ? DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true).toLocal()
         : DateTime.now();
     final dynamic rawUid = json['uid'];
+    final dynamic lat = json['lat'];
+    final dynamic lng = json['lng'];
     return EmergencySignal(
       officer: (json['officer'] ?? '').toString(),
       uid: uid ??
           (rawUid is int ? rawUid : int.tryParse(rawUid?.toString() ?? '') ?? 0),
       timestamp: resolved,
+      latitude: lat is num ? lat.toDouble() : null,
+      longitude: lng is num ? lng.toDouble() : null,
     );
   }
 }
@@ -208,6 +226,11 @@ class CallService extends GetxService {
   // local agent's livestream). Independent of the bodycam (uid 9001).
   final RxBool _isPublishingCamera = false.obs;
 
+  // True while THIS phone is publishing its microphone (broadcasting voice with
+  // the livestream). Goes on together with the camera in [startCameraPublish],
+  // but the agent can mute/unmute it independently via [setBroadcastMicMuted].
+  final RxBool _isPublishingAudio = false.obs;
+
   // Pending snapshot capture; completed by onSnapshotTaken with the saved file
   // path (or null on failure).
   Completer<String?>? _snapshotCompleter;
@@ -234,6 +257,7 @@ class CallService extends GetxService {
   int? get currentUid => _currentUid;
   bool get bodyCamVideoActive => _bodyCamVideoUid.value != null;
   bool get isPublishingCamera => _isPublishingCamera.value;
+  bool get isPublishingAudio => _isPublishingAudio.value;
 
   void setBodyCamVideoActive(bool active) {
     _bodyCamVideoUid.value = active ? bodyCamAgoraUid : null;
@@ -243,7 +267,24 @@ class CallService extends GetxService {
       engine.muteRemoteVideoStream(uid: bodyCamAgoraUid, mute: false).catchError(
         (dynamic e) => debugPrint('CallService: video subscribe error: $e'),
       );
+      _applyBodyCamAudioMute();
     }
+  }
+
+  /// Re-asserts the panel mute state on the bodycam's audio (uid 9001). The
+  /// bodycam's voice is the ONLY thing the panel "mic" button controls, and it
+  /// starts muted by default — so when the bodycam (re)joins we apply the
+  /// current [_isMicrophoneMuted] state instead of letting autoSubscribe play it
+  /// unsolicited.
+  void _applyBodyCamAudioMute() {
+    final engine = _engine;
+    if (engine == null) return;
+    engine
+        .muteRemoteAudioStream(
+            uid: bodyCamAgoraUid, mute: _isMicrophoneMuted.value)
+        .catchError(
+      (dynamic e) => debugPrint('CallService: bodycam audio mute error: $e'),
+    );
   }
 
   /// Turns on the local camera preview (rendered by an AgoraVideoView with
@@ -289,41 +330,119 @@ class CallService extends GetxService {
     }
   }
 
-  /// Starts publishing THIS phone's camera to the channel so other
-  /// participants can watch the local agent's livestream. The same captured
-  /// frames feed the local preview (AgoraVideoView with uid 0). Idempotent.
+  /// Starts publishing THIS phone's camera AND microphone to the channel so
+  /// other participants can watch and HEAR the local agent's livestream. The
+  /// same captured frames feed the local preview (AgoraVideoView with uid 0).
+  /// Idempotent. (RECORD_AUDIO/CAMERA runtime permissions must already be
+  /// granted by the caller.)
   Future<void> startCameraPublish() async {
     final engine = _engine;
     if (engine == null) return;
     try {
+      // Re-enable mic capture (it's OFF by default / after watching) BEFORE
+      // unmuting, so going live actually carries voice. Restore the recording
+      // volume too (it's forced to 0 in receive-only mode).
+      await engine.enableLocalAudio(true);
+      await engine.adjustRecordingSignalVolume(100);
       await _useRearCamera(engine);
       await engine.startPreview();
       await engine.muteLocalVideoStream(false);
+      // Unmute the local mic too — without this the livestream is silent (the
+      // phone is muted-by-default / receive-only outside of going live).
+      await engine.muteLocalAudioStream(false);
       await engine.updateChannelMediaOptions(
-        const ChannelMediaOptions(publishCameraTrack: true),
+        const ChannelMediaOptions(
+          publishCameraTrack: true,
+          publishMicrophoneTrack: true,
+        ),
       );
       _isPublishingCamera.value = true;
+      _isPublishingAudio.value = true;
     } catch (e, st) {
       debugPrint('CallService: startCameraPublish error: $e');
       debugPrint('$st');
     }
   }
 
-  /// Stops publishing the phone camera and returns to receive-only. Keeps the
-  /// local preview alive unless [stopPreview] is set. Idempotent.
+  /// Stops publishing the phone camera + microphone and returns to receive-only.
+  /// Keeps the local preview alive unless [stopPreview] is set. Idempotent.
   Future<void> stopCameraPublish({bool stopPreview = false}) async {
     final engine = _engine;
     if (engine == null) return;
     try {
       await engine.updateChannelMediaOptions(
-        const ChannelMediaOptions(publishCameraTrack: false),
+        const ChannelMediaOptions(
+          publishCameraTrack: false,
+          publishMicrophoneTrack: false,
+        ),
       );
       await engine.muteLocalVideoStream(true);
+      // Re-block the local mic AND kill its capture so we're fully receive-only
+      // again (mic dead unless we publish a livestream).
+      await engine.muteLocalAudioStream(true);
+      await engine.enableLocalAudio(false);
+      await engine.adjustRecordingSignalVolume(0);
       if (stopPreview) await engine.stopPreview();
       _isPublishingCamera.value = false;
+      _isPublishingAudio.value = false;
     } catch (e, st) {
       debugPrint('CallService: stopCameraPublish error: $e');
       debugPrint('$st');
+    }
+  }
+
+  /// Mutes/unmutes the OUTGOING microphone while live, so the broadcasting agent
+  /// can toggle their voice without stopping the camera. Optimistic UI: flips
+  /// the observable first, reverts on failure.
+  Future<void> setBroadcastMicMuted(bool muted) async {
+    final engine = _engine;
+    if (engine == null) return;
+    _isPublishingAudio.value = !muted;
+    try {
+      await engine.muteLocalAudioStream(muted);
+    } catch (e) {
+      _isPublishingAudio.value = muted;
+      debugPrint('CallService: setBroadcastMicMuted error: $e');
+    }
+  }
+
+  /// Mutes/unmutes the INCOMING audio of a specific remote participant — used by
+  /// the livestream WATCH view so the receiver can listen to or silence the
+  /// source they're watching (a peer agent or the bodycam).
+  Future<void> setRemoteAudioMuted({required int uid, required bool muted}) async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.muteRemoteAudioStream(uid: uid, mute: muted);
+    } catch (e) {
+      debugPrint('CallService: setRemoteAudioMuted($uid) error: $e');
+    }
+  }
+
+  /// Forces this phone into strict receive-only mode: stops publishing BOTH the
+  /// camera and the microphone, and physically turns the mic capture OFF
+  /// (`enableLocalAudio(false)`). Called when entering WATCH mode so a receiver
+  /// who is merely viewing another agent's livestream can NEVER emit its own
+  /// audio/video into the channel (its voice was leaking into the stream). The
+  /// data stream (GPS) and remote playback are unaffected.
+  Future<void> ensureReceiveOnly() async {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      await engine.updateChannelMediaOptions(
+        const ChannelMediaOptions(
+          publishMicrophoneTrack: false,
+          publishCameraTrack: false,
+        ),
+      );
+      await engine.muteLocalAudioStream(true);
+      await engine.muteLocalVideoStream(true);
+      await engine.enableLocalAudio(false);
+      await engine.adjustRecordingSignalVolume(0);
+      _isPublishingAudio.value = false;
+      _isPublishingCamera.value = false;
+    } catch (e) {
+      debugPrint('CallService: ensureReceiveOnly error: $e');
     }
   }
 
@@ -379,6 +498,7 @@ class CallService extends GetxService {
   RxInt get connectedUsersCountRx => _connectedUsersCount;
   Rxn<int> get bodyCamVideoUidRx => _bodyCamVideoUid;
   RxBool get isPublishingCameraRx => _isPublishingCamera;
+  RxBool get isPublishingAudioRx => _isPublishingAudio;
   Rxn<EmergencySignal> get incomingEmergencyRx => _incomingEmergency;
   Rxn<EmergencyCancel> get incomingEmergencyCancelRx => _incomingEmergencyCancel;
   Rxn<int> get remoteVideoStoppedRx => _remoteVideoStopped;
@@ -397,11 +517,20 @@ class CallService extends GetxService {
   /// Broadcasts an emergency/recording signal to every other device in the
   /// channel over the always-on data stream. The sender does NOT receive its
   /// own message back from Agora, so its own popup never fires.
-  Future<void> broadcastEmergency({required String officer}) async {
+  /// [startedAt] lets the caller reuse the SOS session's start time across
+  /// periodic heartbeat re-broadcasts, so a device that joins mid-emergency
+  /// still gets alerted while receivers dedupe repeats. Defaults to now.
+  Future<void> broadcastEmergency({
+    required String officer,
+    DateTime? startedAt,
+  }) async {
+    final loc = _localLocation.value;
     final signal = EmergencySignal(
       officer: officer,
       uid: _currentUid ?? _config.localUid,
-      timestamp: DateTime.now(),
+      timestamp: startedAt ?? DateTime.now(),
+      latitude: loc?.latitude,
+      longitude: loc?.longitude,
     );
     await _sendDataStreamJson(signal.toJson());
   }
@@ -479,6 +608,8 @@ class CallService extends GetxService {
           _sendLatestLocalLocationSnapshot();
           if (remoteUid == bodyCamAgoraUid) {
             _bodyCamVideoUid.value = remoteUid;
+            // Honour the default-muted bodycam audio (panel mic controls it).
+            _applyBodyCamAudioMute();
             debugPrint('CallService: bodycam detected → activating video uid=$remoteUid');
           }
         },
@@ -509,6 +640,8 @@ class CallService extends GetxService {
           if (remoteUid == bodyCamAgoraUid) {
             if (live) {
               _bodyCamVideoUid.value = remoteUid;
+              // Keep the bodycam's audio at the panel's mute state (default off).
+              _applyBodyCamAudioMute();
             } else if (state == RemoteVideoState.remoteVideoStateFailed) {
               _bodyCamVideoUid.value = null;
             }
@@ -528,6 +661,7 @@ class CallService extends GetxService {
           _hasJoined.value = false;
           _connectedUsersCount.value = 0;
           _isPublishingCamera.value = false;
+          _isPublishingAudio.value = false;
           _remoteLocations.clear();
           _remoteLastSeen.clear();
           _locationHeartbeatTimer?.cancel();
@@ -562,12 +696,19 @@ class CallService extends GetxService {
       ),
     );
 
-    // Phone is receive-only: enable audio module for playback but permanently
-    // block the local mic. Only the bodycam (UID 9001) ever publishes audio.
+    // Phone is receive-only by default: enable the audio module for playback but
+    // keep the local mic muted AND physically OFF (enableLocalAudio(false) stops
+    // mic capture entirely). The mic only turns on while THIS phone publishes
+    // its own livestream — see startCameraPublish. Without this a receiver
+    // watching an emergency could leak its own voice into the channel. The
+    // bodycam's incoming audio also starts MUTED; the panel "mic" button unmutes
+    // it on demand.
     await rtcEngine.enableAudio();
     await rtcEngine.muteLocalAudioStream(true);
+    await rtcEngine.enableLocalAudio(false);
+    await rtcEngine.adjustRecordingSignalVolume(0); // belt-and-suspenders: mic dead
     await rtcEngine.setDefaultAudioRouteToSpeakerphone(true);
-    _isMicrophoneMuted.value = true;
+    _isMicrophoneMuted.value = true; // bodycam audio muted by default
     _isSpeakerMuted.value = false;
 
     // Enable video module to receive bodycam stream; phone never publishes its own camera.
@@ -592,7 +733,12 @@ class CallService extends GetxService {
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
         publishMicrophoneTrack: false,  // muted until user enables mic
         publishCameraTrack: false,
-        autoSubscribeAudio: true,
+        // Do NOT auto-play everyone's audio. With auto-subscribe on, the moment
+        // any phone went live every other phone in the channel started playing
+        // its voice unsolicited (and fed the echo loop). Audio is now pulled
+        // ON DEMAND: the WATCH view subscribes the source it's viewing, and the
+        // panel "mic" button subscribes the bodycam (uid 9001).
+        autoSubscribeAudio: false,
         autoSubscribeVideo: true,
       ),
     );
@@ -603,25 +749,28 @@ class CallService extends GetxService {
     return this;
   }
 
-  /// Mutes or unmutes the local microphone and synchronises the observable state.
+  /// Mutes or unmutes the BODYCAM's incoming audio (uid 9001) — the only thing
+  /// the panel "mic" button controls. It never touches the local mic (the phone
+  /// only opens its mic while publishing its own livestream) nor a watched
+  /// agent's audio (that's controlled per-uid by the WATCH screen). Starts muted
+  /// by default; tapping the panel button unmutes the bodycam's voice.
   Future<void> setMicrophoneMuted({required bool muted}) async {
     final rtcEngine = _engine;
     if (rtcEngine == null) {
       throw StateError('CallService microphone toggle attempted before init');
     }
 
-    // Phone is receive-only — mute/unmute controls the remote audio subscription,
-    // never the local mic (which is permanently blocked).
     // Optimistic UI: flip the observable first so the icon reacts on tap; the
     // native call below can take tens of ms. Revert if it throws.
     _isMicrophoneMuted.value = muted;
     try {
-      await rtcEngine.muteAllRemoteAudioStreams(muted);
+      await rtcEngine.muteRemoteAudioStream(
+          uid: bodyCamAgoraUid, mute: muted);
     } catch (error) {
       _isMicrophoneMuted.value = !muted;
       rethrow;
     }
-    debugPrint('CallService remote audio muted set to $muted');
+    debugPrint('CallService bodycam audio muted set to $muted');
   }
 
   /// Toggles the device speakerphone route and updates the mute observable.

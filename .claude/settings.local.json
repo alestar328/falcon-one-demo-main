@@ -126,7 +126,9 @@
       "PowerShell(& \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\gradlew.bat\" assembleDebug -p \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\" --console=plain)",
       "PowerShell(& \"D:\\\\flutter\\\\bin\\\\flutter.bat\" build apk --debug)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\" | Select-Object FullName, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,2\\)}}, LastWriteTime)",
-      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-debug.apk\" | Select-Object FullName, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,2\\)}}, LastWriteTime)"
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\Falcon-One-Demo-main\\\\Falcon-One-Demo-main\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-debug.apk\" | Select-Object FullName, @{N='SizeMB';E={[math]::Round\\($_.Length/1MB,2\\)}}, LastWriteTime)",
+      "Bash(explorer.exe /select,\"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\")",
+      "PowerShell(Get-Item *)"
     ]
   }
 }
