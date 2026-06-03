@@ -343,31 +343,43 @@ class MapController extends GetxController with WidgetsBindingObserver {
       bodyCamGpsRaw.value = data.trim();
     }
 
-    // Physical button push-notifications. Normal recording does NOT raise the
-    // SOS/emergency flow (that's the livestream button / SOS [5]); instead it
-    // opens the bodycam feed on the phone as a plain recording viewer.
+    // ═══════════════════════════════════════════════════════════════════════
+    // The bodycam drives TWO SEPARATE flows from TWO different physical buttons.
+    // Keep them apart — they must NOT be merged:
+    //
+    //   ▸ FLOW A — SOS / EMERGENCY  (button physically labelled "SOS" = F4,
+    //       which the firmware maps to RECORD → BTN_REC_*)
+    //       Bodycam-originated SOS detection: raises the emergency popup with
+    //       the Own/External chooser + siren. ("as we had it")
+    //
+    //   ▸ FLOW B — VIEW FEED, NOT SOS  (LIVESTREAM button = F3 → BTN_STREAM_*)
+    //       Just opens the bodycam feed on the phone as a PLAIN viewer.
+    //       No popup, no siren, no chooser.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── FLOW A · SOS / EMERGENCY ("SOS"=F4 button → BTN_REC_*) → Own/External chooser ──
     if (data.contains('BTN_REC_START')) {
       isRecording.value = true;
-      unawaited(_openBodyCamRecordingViewer());
+      _onBodyCamSosSignal();
       return;
     }
     if (data.contains('BTN_REC_STOP')) {
       isRecording.value = false;
+      // Releasing the SOS button cancels the local SOS/emergency signal.
+      _dismissEmergency();
       return;
     }
+
+    // ── FLOW B · VIEW FEED, NO SOS (livestream F3 button → BTN_STREAM_*) → plain viewer ──
     if (data.contains('BTN_STREAM_START')) {
+      // The bodycam is already streaming to Agora (it initiated). Sync the video
+      // and open the plain feed viewer — NO SOS, no chooser.
       unawaited(_onBodyCamStreamStarted());
-      // The bodycam's physical LIVESTREAM button raises the emergency/SOS flow:
-      // a livestream from the field signals an incident. (Recording stays normal
-      // recording — see BTN_REC_* above. Emergency lives only here and on the
-      // map SOS button [5].)
-      _onBodyCamLivestreamSignal();
+      unawaited(_openBodyCamRecordingViewer());
       return;
     }
     if (data.contains('BTN_STREAM_STOP')) {
       unawaited(_onBodyCamStreamStopped());
-      // Stopping the livestream cancels the local emergency signal.
-      _dismissEmergency();
       return;
     }
 
@@ -380,11 +392,11 @@ class MapController extends GetxController with WidgetsBindingObserver {
         final recMatch = RegExp(r'"recording":(true|false)').firstMatch(data);
         if (recMatch != null) {
           final rec = recMatch.group(1) == 'true';
-          // Open the recording viewer on the false→true edge (bodycam started
-          // recording) — backup for a missed BTN_REC_START. Guarded inside the
-          // method so the 5 s STATUS poll doesn't re-stack the screen. No
-          // emergency flow (that's the livestream button / SOS [5] only).
-          if (rec && !isRecording.value) unawaited(_openBodyCamRecordingViewer());
+          // FLOW A backup: the "SOS" button (F4) makes the bodycam record, so a
+          // recording false→true edge = SOS pressed (in case BTN_REC_START was
+          // missed). Raise the SOS flow; dismiss it on the true→false edge.
+          if (rec && !isRecording.value) _onBodyCamSosSignal();
+          if (!rec && isRecording.value) _dismissEmergency();
           isRecording.value = rec;
         }
 
@@ -392,7 +404,10 @@ class MapController extends GetxController with WidgetsBindingObserver {
         if (streamMatch != null) {
           final streaming = streamMatch.group(1) == 'true';
           if (streaming && !isStreaming.value) {
+            // FLOW B backup: open the plain feed viewer if BTN_STREAM_START was
+            // missed (guarded so the 5 s poll doesn't re-stack the screen).
             unawaited(_onBodyCamStreamStarted());
+            unawaited(_openBodyCamRecordingViewer());
           } else if (!streaming && isStreaming.value) {
             unawaited(_onBodyCamStreamStopped());
           }
@@ -415,13 +430,14 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _ensureCallService()?.setBodyCamVideoActive(false);
   }
 
-  /// The bodycam pressed its physical NORMAL-RECORDING button → open its feed on
-  /// the phone as a plain recording viewer (uid 9001, badge REC·BODYCAM): NO
-  /// emergency, siren or chooser (that's the livestream button / SOS [5]). Asks
-  /// the bodycam to stream to Agora first (STREAM_START over BT) so there's a
-  /// feed to show. Guarded so repeated REC signals / STATUS polls don't stack
-  /// the screen — the flag stays set while the viewer is open and clears when
-  /// it's popped.
+  /// FLOW B — BODYCAM VIEW FEED (NOT SOS).
+  /// The bodycam pressed its physical LIVESTREAM button (F3) → it is ALREADY
+  /// streaming to Agora, so just open its feed on the phone as a plain viewer
+  /// (uid 9001, badge REC·BODYCAM): NO emergency, siren or chooser (that's
+  /// FLOW A, the "SOS" button F4). No STREAM_START is sent from here — the
+  /// bodycam initiated the stream itself. Guarded so repeated signals / STATUS
+  /// polls don't stack the screen — the flag stays set while the viewer is open
+  /// and clears when it's popped.
   bool _recordingViewerOpen = false;
   Future<void> _openBodyCamRecordingViewer() async {
     if (_recordingViewerOpen) return;
@@ -429,22 +445,27 @@ class MapController extends GetxController with WidgetsBindingObserver {
     try {
       final ok = await ensureAgoraStarted();
       if (!ok) return;
-      // Transport only: make the bodycam emit to Agora so the phone can SEE the
-      // recording (uid 9001). Still presented as recording, not a livestream.
-      await startStream();
       await _openLivestreamScreen(watchUid: CallService.bodyCamAgoraUid);
     } finally {
       _recordingViewerOpen = false;
     }
   }
 
-  /// The bodycam pressed its physical LIVESTREAM button → raise the emergency
-  /// flow on the phone (Own/External chooser + siren; "Receive livestream" opens
-  /// the bodycam feed, uid 9001). This is the demo's bodycam-originated SOS. The
-  /// panel bodycam button [3] (openBodyCamRecording) does NOT come through here —
-  /// it sends STREAM_START to the bodycam itself, never a BTN_STREAM_START echo —
-  /// so opening the recording viewer from the panel stays emergency-free.
-  void _onBodyCamLivestreamSignal() {
+  /// FLOW A — BODYCAM SOS / EMERGENCY.
+  /// The bodycam pressed its physical "SOS" button (F4, which the firmware maps
+  /// to RECORD → BTN_REC_*) → raise the emergency flow on the phone: the
+  /// Own/External CHOOSER + siren ("Receive livestream" opens the bodycam feed,
+  /// uid 9001). This is the bodycam-originated SOS detection — restored "as we
+  /// had it".
+  ///
+  /// `directExternal` is left at its default (false) ON PURPOSE so the
+  /// Own/External chooser is shown (the demo's own-vs-external simulation). Do
+  /// NOT pass directExternal:true here — that would skip the chooser.
+  ///
+  /// NOTE: the panel bodycam button [3] (toggleBodyCamConnection) does NOT come
+  /// through here — it only manages the BT link and never emits BTN_REC_START —
+  /// so it stays SOS-free.
+  void _onBodyCamSosSignal() {
     _showEmergencyFlow(
       simulatedExternalAgentLabel,
       sourceUid: CallService.bodyCamAgoraUid,
