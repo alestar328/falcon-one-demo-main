@@ -130,7 +130,10 @@
       "Bash(explorer.exe /select,\"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\")",
       "PowerShell(Get-Item *)",
       "Bash(findstr /I \"image_picker camera: path_provider gal saver photo_manager\" pubspec.yaml\rD/Surface \\(23089\\): lockHardwareCanvas\rD/Surface \\(23089\\): lockHardwareCanvas\rD/Surface \\(23089\\): lockHardwareCanvas\rW/CameraMetadataJV\\(23089\\): Expect face scores and rectangles to be non-null\rD/Surface \\(23089\\): lockHardwareCanvas\rD/Surface \\(23089\\): lockHardwareCanvas\rD/Surface \\(23089\\): lockHardwareCanvas\rW/CameraMetadataJV\\(23089\\): Expect face scores and rectangles to be non-nulalmacena)",
-      "Bash(Select-String -Pattern \"STREAM_START|RecordingSignal|_onBodyCamStream|emergency|Emergency\" -Context 2,2)"
+      "Bash(Select-String -Pattern \"STREAM_START|RecordingSignal|_onBodyCamStream|emergency|Emergency\" -Context 2,2)",
+      "Bash(C:\\\\platform-tools\\\\adb.exe devices *)",
+      "Bash(C:\\\\platform-tools\\\\adb.exe shell *)",
+      "PowerShell(& \"C:\\\\platform-tools\\\\adb.exe\" devices; Write-Output \"---modelo---\"; & \"C:\\\\platform-tools\\\\adb.exe\" shell getprop ro.product.model)"
     ]
   }
 }

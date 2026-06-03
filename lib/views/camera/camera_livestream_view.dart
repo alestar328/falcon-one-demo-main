@@ -26,11 +26,17 @@ import 'package:permission_handler/permission_handler.dart';
 /// handled server-side and wired separately; this screen only drives the live
 /// transport.
 class CameraLivestreamView extends StatefulWidget {
-  const CameraLivestreamView({super.key, this.watchUid});
+  const CameraLivestreamView({super.key, this.watchUid, this.agentLabel});
 
   /// When non-null, render this remote participant's video instead of going
   /// live with our own camera. 9001 = bodycam, anything else = another phone.
   final int? watchUid;
+
+  /// When non-null, the watched source is presented as an EXTERNAL AGENT: the
+  /// badge shows the agent tag ("LIVE · <label>") and a "Signal cut" notice
+  /// pops when the feed dies — even for the bodycam (the demo's external-agent
+  /// simulation). When null, the bodycam reads "REC · BODYCAM" with no cut alarm.
+  final String? agentLabel;
 
   @override
   State<CameraLivestreamView> createState() => _CameraLivestreamViewState();
@@ -100,8 +106,16 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
       // last known location reverse-geocoded to city/country.
       _sourceStoppedWorker = ever<int?>(call.remoteVideoStoppedRx, (uid) {
         if (uid != widget.watchUid || _cutShown || !mounted) return;
+        // For the bodycam, only show the cut notice when it's the external-agent
+        // simulation (agentLabel set). A bodycam watched as "own" has no alarm.
+        final isBodycam = uid == CallService.bodyCamAgoraUid;
+        if (isBodycam && widget.agentLabel == null) return;
         _cutShown = true;
-        final loc = call.remoteLocation(widget.watchUid!);
+        // The bodycam has no GPS of its own → fall back to THIS phone's location
+        // (it's co-located with the bodycam). Agent phones carry their own GPS.
+        final loc = isBodycam
+            ? call.localLocationRx.value
+            : call.remoteLocation(widget.watchUid!);
         showSignalCutDialog(
           time: DateTime.now(),
           latitude: loc?.latitude,
@@ -285,11 +299,17 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     });
   }
 
-  /// Badge shown in watch mode. The bodycam is normal RECORDING (not a
-  /// livestream), so it reads "REC · BODYCAM"; another agent's feed (SOS) is a
-  /// live broadcast, so it reads "LIVE · OFFICER".
+  /// Badge shown in watch mode. An external-agent feed (incl. the bodycam
+  /// simulated as one — [agentLabel] set) reads `LIVE · {agent}`; a bodycam
+  /// watched as our own reads `REC · BODYCAM`.
   Widget _buildWatchBadge() {
     final isBodycam = widget.watchUid == CallService.bodyCamAgoraUid;
+    final label = widget.agentLabel;
+    final external = label != null;
+    final text = external
+        ? 'LIVE · ${label.toUpperCase()}'
+        : (isBodycam ? 'REC · BODYCAM' : 'LIVE · OFFICER');
+    final bodycamRec = isBodycam && !external;
     return Positioned(
       top: 0,
       right: 12,
@@ -303,11 +323,11 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(isBodycam ? Icons.fiber_manual_record : Icons.circle,
-                  color: Colors.white, size: isBodycam ? 10 : 8),
+              Icon(bodycamRec ? Icons.fiber_manual_record : Icons.circle,
+                  color: Colors.white, size: bodycamRec ? 10 : 8),
               const SizedBox(width: 4),
               Text(
-                isBodycam ? 'REC · BODYCAM' : 'LIVE · OFFICER',
+                text,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 11,

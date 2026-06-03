@@ -608,6 +608,11 @@ class CallService extends GetxService {
           _sendLatestLocalLocationSnapshot();
           if (remoteUid == bodyCamAgoraUid) {
             _bodyCamVideoUid.value = remoteUid;
+            // Fresh bodycam session → clear any stale "cut" flag so the next SOS
+            // can fire the signal-cut notice again.
+            if (_remoteVideoStopped.value == bodyCamAgoraUid) {
+              _remoteVideoStopped.value = null;
+            }
             // Honour the default-muted bodycam audio (panel mic controls it).
             _applyBodyCamAudioMute();
             debugPrint('CallService: bodycam detected → activating video uid=$remoteUid');
@@ -620,10 +625,11 @@ class CallService extends GetxService {
             _connectedUsersCount.value--;
           }
           if (remoteUid == bodyCamAgoraUid) _bodyCamVideoUid.value = null;
-          // An agent phone going offline = its livestream is cut.
-          if (remoteUid != bodyCamAgoraUid) {
-            _remoteVideoStopped.value = remoteUid;
-          }
+          // A source going offline = its livestream is cut → let the WATCH view
+          // show the "Signal cut" notice. Applies to agent phones AND the
+          // bodycam (when it's watched as the external-agent simulation; the
+          // view gates the bodycam cut on agentLabel being set).
+          _remoteVideoStopped.value = remoteUid;
           // Only drop the map marker on a graceful quit. A transient drop
           // (frequent while moving) keeps the last-known marker; the TTL sweep
           // removes it later if the peer never comes back.
@@ -640,10 +646,14 @@ class CallService extends GetxService {
           if (remoteUid == bodyCamAgoraUid) {
             if (live) {
               _bodyCamVideoUid.value = remoteUid;
+              if (_remoteVideoStopped.value == bodyCamAgoraUid) {
+                _remoteVideoStopped.value = null;
+              }
               // Keep the bodycam's audio at the panel's mute state (default off).
               _applyBodyCamAudioMute();
             } else if (state == RemoteVideoState.remoteVideoStateFailed) {
               _bodyCamVideoUid.value = null;
+              _remoteVideoStopped.value = bodyCamAgoraUid;
             }
             // STOPPED/FROZEN: don't clear — onUserOffline handles a real exit.
             return;

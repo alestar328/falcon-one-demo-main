@@ -193,8 +193,9 @@ class MapView extends GetView<MapController> {
         child: Row(
           spacing: 10.0,
           children: [
-            // ══ ButtonsPanel ══════════════════════════════════════════════
-            // The 6-button control grid (2 rows × 3), left column of the panel:
+            // ══ Panel accion ══════════════════════════════════════════════
+            // Left column: the 6 INTERACTIVE buttons (2 rows × 3) — each one
+            // triggers an action (vs. the read-only "Panel info" on the right):
             //   Row 1:  speaker  |  mic  |  bodycam
             //   Row 2:  photo    |  SOS  |  glasses
             // The SOS button (row 2, centre — directly below the mic) broadcasts
@@ -329,7 +330,10 @@ class MapView extends GetView<MapController> {
                 );
               }),
             ),
-            // ── Right column: status info + glasses banner ────────────────
+            // ══ Panel info ════════════════════════════════════════════════
+            // Right column: read-only STATUS indicators (no actions) — phone +
+            // bodycam battery, connected users, Agora signal, satellites, the
+            // Bluetooth bodycam indicator, and the glasses banner. Display only.
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.only(left: 10.0),
@@ -339,11 +343,12 @@ class MapView extends GetView<MapController> {
                   spacing: 8.0,
                   children: [
                     // Phone battery always; bodycam battery appended (with a
-                    // camera icon) only when the bodycam is connected.
+                    // camera icon) ONLY when BT-linked — the % comes from the BT
+                    // STATUS JSON, and being live in Agora during an SOS doesn't
+                    // count (same rule as the bodycam indicator below).
                     Obx(() {
                       final bodycamConnected =
-                          controller.bodyCamState.value == 'connected' ||
-                          controller.bodyCamLiveInAgora.value;
+                          controller.bodyCamState.value == 'connected';
                       return Row(
                         spacing: 10.0,
                         children: [
@@ -398,13 +403,13 @@ class MapView extends GetView<MapController> {
                             controller.numSatellites.value.toString())),
                       ],
                     ),
-                    // Bodycam connection indicator. "Connected" means the bodycam
-                    // is reachable: BT-linked OR live in the Agora channel (the
-                    // latter is the reliable signal in the current setup).
+                    // Bodycam connection indicator. Green ONLY when the bodycam
+                    // is linked over BLUETOOTH. Being live in Agora (e.g. the
+                    // bodycam livestreaming during an SOS) must NOT turn this
+                    // green — this reflects the BT control link only.
                     Obx(() {
                       final connected =
-                          controller.bodyCamState.value == 'connected' ||
-                          controller.bodyCamLiveInAgora.value;
+                          controller.bodyCamState.value == 'connected';
                       return Row(
                         spacing: 10.0,
                         children: [

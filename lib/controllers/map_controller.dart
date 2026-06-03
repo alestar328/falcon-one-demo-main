@@ -439,9 +439,38 @@ class MapController extends GetxController with WidgetsBindingObserver {
   /// (BTN_STREAM_START) and the Agora trigger (uid 9001 going live, see
   /// _bodyCamVideoWorker) never stack two popups.
   void _onBodyCamSosSignal() {
+    // Log the SOS in the notification centre once per bodycam session (the demo
+    // presents it as the simulated external agent "Officer 007"). Deduped with
+    // _bodyCamSosNotified, reset when the bodycam stops (see _bodyCamVideoWorker).
+    if (!_bodyCamSosNotified) {
+      _bodyCamSosNotified = true;
+      _addBodyCamSosNotification();
+    }
     _showEmergencyFlow(
       simulatedExternalAgentLabel,
       sourceUid: CallService.bodyCamAgoraUid,
+    );
+  }
+
+  // True once we've logged a notification for the current bodycam SOS session.
+  bool _bodyCamSosNotified = false;
+
+  /// Adds the bodycam SOS to the notification centre as the simulated external
+  /// agent. The bodycam has no GPS, so we tag it with THIS phone's location
+  /// (it's physically co-located with the bodycam).
+  void _addBodyCamSosNotification() {
+    final now = DateTime.now();
+    sosNotifications.insert(
+      0,
+      SosNotification(
+        sessionKey: 'bodycam@${now.millisecondsSinceEpoch}',
+        officer: '007',
+        uid: CallService.bodyCamAgoraUid,
+        receivedAt: now,
+        emittedAt: now,
+        latitude: lat,
+        longitude: lng,
+      ),
     );
   }
 
@@ -1063,7 +1092,10 @@ class MapController extends GetxController with WidgetsBindingObserver {
       // Guarded by _emergencyDialogOpen so it won't stack with the BT
       // BTN_STREAM_START trigger.
       if (isLive && !wasLive) _onBodyCamSosSignal();
-      if (!isLive && wasLive) _dismissEmergency();
+      if (!isLive && wasLive) {
+        _bodyCamSosNotified = false; // allow the next SOS session to log again
+        _dismissEmergency();
+      }
     });
 
     agoraConnected.value = service.hasJoinedRx.value;
@@ -1227,7 +1259,8 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _emergencyDialogOpen = true;
     showEmergencyTreatmentFlow(
       agentLabel: agentLabel,
-      onOpenLivestream: () => _openLivestreamScreen(watchUid: sourceUid),
+      onOpenLivestream: ({String? agentLabel}) =>
+          _openLivestreamScreen(watchUid: sourceUid, agentLabel: agentLabel),
       directExternal: directExternal,
     ).whenComplete(() => _emergencyDialogOpen = false);
   }
@@ -1235,10 +1268,12 @@ class MapController extends GetxController with WidgetsBindingObserver {
   /// Opens the livestream screen. With [watchUid] it renders that remote
   /// source's video (bodycam 9001 or an agent's phone) instead of going live
   /// with this phone's own camera; without it, it's the publish-mode screen
-  /// (same as the map's right-edge handle).
-  Future<void> _openLivestreamScreen({int? watchUid}) async {
+  /// (same as the map's right-edge handle). [agentLabel] (set only when the
+  /// source is treated as an external agent) drives the agent tag + "Signal cut"
+  /// notice — including the bodycam when it's simulated as an external agent.
+  Future<void> _openLivestreamScreen({int? watchUid, String? agentLabel}) async {
     await Get.to<void>(
-      () => CameraLivestreamView(watchUid: watchUid),
+      () => CameraLivestreamView(watchUid: watchUid, agentLabel: agentLabel),
       transition: Transition.rightToLeft,
       duration: const Duration(milliseconds: 280),
     );

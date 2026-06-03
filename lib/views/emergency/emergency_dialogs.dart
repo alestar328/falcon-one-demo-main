@@ -22,9 +22,13 @@ enum EmergencyTreatment { own, external }
 /// [agentLabel] is the source shown on the external path (e.g. "Officer off-001"
 /// from the broadcaster payload, or the simulated "Officer 007"). [onOpenLivestream]
 /// opens the swipe livestream screen.
+/// [onOpenLivestream] receives the [agentLabel] ONLY on the External path (so
+/// the watch view presents the source as a remote agent: agent tag + "Signal
+/// cut" notice). On the Own path it's called with null (the bodycam shown as
+/// ours, no agent tag, no cut alarm).
 Future<void> showEmergencyTreatmentFlow({
   required String agentLabel,
-  required Future<void> Function() onOpenLivestream,
+  required Future<void> Function({String? agentLabel}) onOpenLivestream,
   bool directExternal = false,
 }) async {
   if (directExternal) {
@@ -38,7 +42,7 @@ Future<void> showEmergencyTreatmentFlow({
   );
 
   if (treatment == EmergencyTreatment.own) {
-    await onOpenLivestream();
+    await onOpenLivestream(agentLabel: null);
   } else if (treatment == EmergencyTreatment.external) {
     await _showExternalEmergency(agentLabel, onOpenLivestream);
   }
@@ -46,7 +50,7 @@ Future<void> showEmergencyTreatmentFlow({
 
 Future<void> _showExternalEmergency(
   String agentLabel,
-  Future<void> Function() onOpenLivestream,
+  Future<void> Function({String? agentLabel}) onOpenLivestream,
 ) async {
   // The dialog just returns whether the receiver accepted. We open the
   // livestream AFTER it has fully closed — navigating from inside the button's
@@ -57,7 +61,7 @@ Future<void> _showExternalEmergency(
     barrierDismissible: false,
   );
   if (accepted == true) {
-    await onOpenLivestream();
+    await onOpenLivestream(agentLabel: agentLabel);
   }
 }
 
