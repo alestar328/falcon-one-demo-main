@@ -29,6 +29,7 @@ class MapView extends GetView<MapController> {
       body: Stack(children: [
         _buildMap(),
         _buildTopRightControls(),
+        _buildRecordingIndicator(),
         _buildMyLocationButton(),
         _buildButtonPanel(),
         _buildCameraSwipeHandle(),
@@ -91,6 +92,52 @@ class MapView extends GetView<MapController> {
             ),
           );
         }),
+      ),
+    );
+  }
+
+  /// Recording indicator — a red "REC · BODYCAM" pill at the top-centre, shown
+  /// only while the bodycam is recording normally (bound to [isRecording]). The
+  /// bodycam records locally; the phone can't show the live feed during normal
+  /// recording (record & livestream are mutually exclusive on the device), so
+  /// this is the on-phone confirmation that recording is in progress.
+  Widget _buildRecordingIndicator() {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        child: Center(
+          child: Obx(() {
+            if (!controller.isRecording.value) return const SizedBox.shrink();
+            return Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFFE53935), width: 1),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.fiber_manual_record,
+                      color: Color(0xFFE53935), size: 14),
+                  SizedBox(width: 6),
+                  Text(
+                    'REC · BODYCAM',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ),
       ),
     );
   }
@@ -163,6 +210,20 @@ class MapView extends GetView<MapController> {
         ),
       ),
     );
+  }
+
+  /// Picks the Material battery glyph that matches the phone's charge level, so
+  /// the icon tracks the real % instead of the old static "battery_3_bar" (which
+  /// always looked ~50%). Pairs with the "$level%" text next to it.
+  IconData _phoneBatteryIcon(int level) {
+    if (level >= 95) return Icons.battery_full;
+    if (level >= 80) return Icons.battery_6_bar;
+    if (level >= 65) return Icons.battery_5_bar;
+    if (level >= 50) return Icons.battery_4_bar;
+    if (level >= 35) return Icons.battery_3_bar;
+    if (level >= 20) return Icons.battery_2_bar;
+    if (level >= 5) return Icons.battery_1_bar;
+    return Icons.battery_alert;
   }
 
   Widget _buildMap() {
@@ -349,11 +410,15 @@ class MapView extends GetView<MapController> {
                     Obx(() {
                       final bodycamConnected =
                           controller.bodyCamState.value == 'connected';
+                      final phoneLevel = controller.phoneBatteryLevel.value;
                       return Row(
                         spacing: 10.0,
                         children: [
-                          const Icon(Icons.battery_3_bar),
-                          Text("${controller.phoneBatteryLevel.value}%"),
+                          Icon(
+                            _phoneBatteryIcon(phoneLevel),
+                            color: phoneLevel <= 15 ? Colors.redAccent : null,
+                          ),
+                          Text("$phoneLevel%"),
                           if (bodycamConnected) ...[
                             const Icon(Icons.videocam, size: 18),
                             Text("${controller.batteryLevel.value}%"),

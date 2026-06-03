@@ -133,7 +133,9 @@
       "Bash(Select-String -Pattern \"STREAM_START|RecordingSignal|_onBodyCamStream|emergency|Emergency\" -Context 2,2)",
       "Bash(C:\\\\platform-tools\\\\adb.exe devices *)",
       "Bash(C:\\\\platform-tools\\\\adb.exe shell *)",
-      "PowerShell(& \"C:\\\\platform-tools\\\\adb.exe\" devices; Write-Output \"---modelo---\"; & \"C:\\\\platform-tools\\\\adb.exe\" shell getprop ro.product.model)"
+      "PowerShell(& \"C:\\\\platform-tools\\\\adb.exe\" devices; Write-Output \"---modelo---\"; & \"C:\\\\platform-tools\\\\adb.exe\" shell getprop ro.product.model)",
+      "PowerShell(& \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\gradlew.bat\" -p \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\" assembleDebug 2>&1 | Select-Object -Last 40)",
+      "PowerShell($apk = \"C:\\\\Users\\\\newge\\\\Desktop\\\\BodyCam\\\\BodyCamServer\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\"; if \\(Test-Path $apk\\) { $f = Get-Item $apk; Write-Output \\(\"OK: \" + $f.FullName\\); Write-Output \\(\"Tamano: \" + [math]::Round\\($f.Length/1MB,1\\) + \" MB\"\\); Write-Output \\(\"Modificado: \" + $f.LastWriteTime\\) } else { Write-Output \"NO encontrado en la ruta esperada\" })"
     ]
   }
 }

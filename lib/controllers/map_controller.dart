@@ -371,11 +371,14 @@ class MapController extends GetxController with WidgetsBindingObserver {
     }
 
     // ── NORMAL RECORDING · record button (134) → BTN_REC_*. NEVER raises SOS ──
+    // While recording, the map shows a "REC" indicator (bound to isRecording).
+    // On stop we confirm the evidence was stored (see _onBodyCamRecordingStopped).
     if (data.contains('BTN_REC_START')) {
       isRecording.value = true;
       return;
     }
     if (data.contains('BTN_REC_STOP')) {
+      if (isRecording.value) _onBodyCamRecordingStopped();
       isRecording.value = false;
       return;
     }
@@ -388,9 +391,12 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
         final recMatch = RegExp(r'"recording":(true|false)').firstMatch(data);
         if (recMatch != null) {
-          // Normal recording (record button, keycode 134): just track the state
-          // for the panel icon. NEVER raises SOS.
-          isRecording.value = recMatch.group(1) == 'true';
+          // Normal recording (record button, keycode 134): track the state (drives
+          // the map REC indicator). On the true→false edge, confirm the evidence
+          // was stored. NEVER raises SOS.
+          final rec = recMatch.group(1) == 'true';
+          if (!rec && isRecording.value) _onBodyCamRecordingStopped();
+          isRecording.value = rec;
         }
 
         final streamMatch = RegExp(r'"streaming":(true|false)').firstMatch(data);
@@ -423,6 +429,20 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Future<void> _onBodyCamStreamStopped() async {
     isStreaming.value = false;
     _ensureCallService()?.setBodyCamVideoActive(false);
+  }
+
+  /// Normal recording stopped on the bodycam → confirm the evidence is stored.
+  /// NOTE (demo): this is a UI confirmation. The clip is recorded on the bodycam
+  /// itself; pulling it over WiFi and uploading it to Nexus is the separate W1
+  /// import/upload flow (clock icon → UploadService). This message does NOT
+  /// itself perform that upload — wire it to the real upload result when ready.
+  void _onBodyCamRecordingStopped() {
+    _safeSnackBar(
+      'Evidence',
+      'The evidence has been saved in the Nexus server',
+      backgroundColor: const Color(0xFF1B5E20),
+      colorText: Colors.white,
+    );
   }
 
   /// BODYCAM SOS / EMERGENCY.
