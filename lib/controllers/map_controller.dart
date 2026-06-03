@@ -9,15 +9,16 @@ import 'package:falcon_one_demo/services/agora_launcher.dart';
 import 'package:falcon_one_demo/models/sos_notification.dart';
 import 'package:falcon_one_demo/models/w1_recording.dart';
 import 'package:falcon_one_demo/services/bodycam_service.dart';
+import 'package:falcon_one_demo/services/photo_storage_service.dart';
 import 'package:falcon_one_demo/services/upload_service.dart';
 import 'package:falcon_one_demo/services/w1_service.dart';
 import 'package:falcon_one_demo/views/camera/camera_livestream_view.dart';
-import 'package:falcon_one_demo/views/camera/photo_capture_view.dart';
 import 'package:falcon_one_demo/views/emergency/emergency_dialogs.dart';
 import 'package:falcon_one_demo/widgets/w1_recording_import_sheet.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:image_picker/image_picker.dart' as img_picker;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -270,22 +271,28 @@ class MapController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  Future<void> toggleBodyCam() async {
-    try {
-      final state = _bodyCam.state;
-      if (state == BtState.connected) {
-        if (isRecording.value) {
-          await _bodyCam.stopRecording();
-          isRecording.value = false;
-        }
+  /// Panel bodycam button [3] = Bluetooth CONNECT/DISCONNECT toggle. This is the
+  /// only thing the panel button does: manage the BT control link to the
+  /// bodycam. The bodycam's OWN physical buttons drive everything else —
+  /// livestream (which raises the emergency flow here) and normal recording.
+  /// Tapping while disconnected connects; while connected, disconnects. Taps
+  /// during 'connecting' are ignored.
+  Future<void> toggleBodyCamConnection() async {
+    final state = _bodyCam.state;
+    if (state == BtState.connected) {
+      try {
         await _bodyCam.disconnect();
-      } else if (state == BtState.disconnected || state == BtState.error) {
-        bodyCamState.value = 'connecting';
-        await _bodyCam.connect();
+      } catch (e) {
+        debugPrint('toggleBodyCamConnection disconnect error: $e');
       }
-    } catch (e) {
-      debugPrint('toggleBodyCam error: $e');
-      bodyCamState.value = 'error';
+    } else if (state == BtState.disconnected || state == BtState.error) {
+      bodyCamState.value = 'connecting';
+      try {
+        await _bodyCam.connect();
+      } catch (e) {
+        debugPrint('toggleBodyCamConnection connect error: $e');
+        bodyCamState.value = 'error';
+      }
     }
   }
 
@@ -336,23 +343,31 @@ class MapController extends GetxController with WidgetsBindingObserver {
       bodyCamGpsRaw.value = data.trim();
     }
 
-    // Physical button push-notifications
+    // Physical button push-notifications. Normal recording does NOT raise the
+    // SOS/emergency flow (that's the livestream button / SOS [5]); instead it
+    // opens the bodycam feed on the phone as a plain recording viewer.
     if (data.contains('BTN_REC_START')) {
       isRecording.value = true;
-      _onBodyCamRecordingSignal();
+      unawaited(_openBodyCamRecordingViewer());
       return;
     }
     if (data.contains('BTN_REC_STOP')) {
       isRecording.value = false;
-      _dismissEmergency();
       return;
     }
     if (data.contains('BTN_STREAM_START')) {
       unawaited(_onBodyCamStreamStarted());
+      // The bodycam's physical LIVESTREAM button raises the emergency/SOS flow:
+      // a livestream from the field signals an incident. (Recording stays normal
+      // recording — see BTN_REC_* above. Emergency lives only here and on the
+      // map SOS button [5].)
+      _onBodyCamLivestreamSignal();
       return;
     }
     if (data.contains('BTN_STREAM_STOP')) {
       unawaited(_onBodyCamStreamStopped());
+      // Stopping the livestream cancels the local emergency signal.
+      _dismissEmergency();
       return;
     }
 
@@ -365,11 +380,11 @@ class MapController extends GetxController with WidgetsBindingObserver {
         final recMatch = RegExp(r'"recording":(true|false)').firstMatch(data);
         if (recMatch != null) {
           final rec = recMatch.group(1) == 'true';
-          // Fire the emergency flow only on the false→true edge so the 5 s
-          // STATUS poll doesn't re-open the popup every tick; dismiss it on the
-          // true→false edge (recording stopped = signal cancelled).
-          if (rec && !isRecording.value) _onBodyCamRecordingSignal();
-          if (!rec && isRecording.value) _dismissEmergency();
+          // Open the recording viewer on the false→true edge (bodycam started
+          // recording) — backup for a missed BTN_REC_START. Guarded inside the
+          // method so the 5 s STATUS poll doesn't re-stack the screen. No
+          // emergency flow (that's the livestream button / SOS [5] only).
+          if (rec && !isRecording.value) unawaited(_openBodyCamRecordingViewer());
           isRecording.value = rec;
         }
 
@@ -398,6 +413,42 @@ class MapController extends GetxController with WidgetsBindingObserver {
   Future<void> _onBodyCamStreamStopped() async {
     isStreaming.value = false;
     _ensureCallService()?.setBodyCamVideoActive(false);
+  }
+
+  /// The bodycam pressed its physical NORMAL-RECORDING button → open its feed on
+  /// the phone as a plain recording viewer (uid 9001, badge REC·BODYCAM): NO
+  /// emergency, siren or chooser (that's the livestream button / SOS [5]). Asks
+  /// the bodycam to stream to Agora first (STREAM_START over BT) so there's a
+  /// feed to show. Guarded so repeated REC signals / STATUS polls don't stack
+  /// the screen — the flag stays set while the viewer is open and clears when
+  /// it's popped.
+  bool _recordingViewerOpen = false;
+  Future<void> _openBodyCamRecordingViewer() async {
+    if (_recordingViewerOpen) return;
+    _recordingViewerOpen = true;
+    try {
+      final ok = await ensureAgoraStarted();
+      if (!ok) return;
+      // Transport only: make the bodycam emit to Agora so the phone can SEE the
+      // recording (uid 9001). Still presented as recording, not a livestream.
+      await startStream();
+      await _openLivestreamScreen(watchUid: CallService.bodyCamAgoraUid);
+    } finally {
+      _recordingViewerOpen = false;
+    }
+  }
+
+  /// The bodycam pressed its physical LIVESTREAM button → raise the emergency
+  /// flow on the phone (Own/External chooser + siren; "Receive livestream" opens
+  /// the bodycam feed, uid 9001). This is the demo's bodycam-originated SOS. The
+  /// panel bodycam button [3] (openBodyCamRecording) does NOT come through here —
+  /// it sends STREAM_START to the bodycam itself, never a BTN_STREAM_START echo —
+  /// so opening the recording viewer from the panel stays emergency-free.
+  void _onBodyCamLivestreamSignal() {
+    _showEmergencyFlow(
+      simulatedExternalAgentLabel,
+      sourceUid: CallService.bodyCamAgoraUid,
+    );
   }
 
   // ── W1 HTTP methods ───────────────────────────────────────────────────────
@@ -1008,19 +1059,10 @@ class MapController extends GetxController with WidgetsBindingObserver {
 
     bodyCamLiveInAgora.value = service.bodyCamVideoUidRx.value != null;
     _bodyCamVideoWorker ??= ever<int?>(service.bodyCamVideoUidRx, (uid) {
-      final wasLive = bodyCamLiveInAgora.value;
-      final isLive = uid != null;
-      bodyCamLiveInAgora.value = isLive;
-      // The bodycam going live in Agora (UID 9001) is the RELIABLE "recording /
-      // stream signal" in this setup — the BT link is flaky and the bodycam
-      // joins Agora on its own, so we can't depend on BTN_REC_START arriving.
-      // Fire the same Propio/Externo flow on the null→live edge, and dismiss it
-      // (stopping the siren) when the bodycam drops.
-      if (isLive && !wasLive) {
-        _onBodyCamRecordingSignal();
-      } else if (!isLive && wasLive) {
-        _dismissEmergency();
-      }
+      // The bodycam going live in Agora (UID 9001) is "normal recording" now —
+      // we just track whether its feed is available (panel indicator + the
+      // recording viewer). It no longer raises the SOS/emergency flow.
+      bodyCamLiveInAgora.value = uid != null;
     });
 
     agoraConnected.value = service.hasJoinedRx.value;
@@ -1170,16 +1212,6 @@ class MapController extends GetxController with WidgetsBindingObserver {
     _emergencyDialogOpen = false;
   }
 
-  /// Local bodycam recording signal (physical button / STATUS edge). The source
-  /// is always the bodycam (Agora UID 9001), so the livestream shows the bodycam
-  /// feed — not this phone's own camera.
-  void _onBodyCamRecordingSignal() {
-    _showEmergencyFlow(
-      simulatedExternalAgentLabel,
-      sourceUid: CallService.bodyCamAgoraUid,
-    );
-  }
-
   /// Shows the emergency flow, guarding against stacking. [sourceUid] is the
   /// Agora uid whose video to show if the presenter opens the livestream: 9001 =
   /// bodycam, any other uid = the emitting agent's phone. When [directExternal]
@@ -1211,28 +1243,52 @@ class MapController extends GetxController with WidgetsBindingObserver {
     );
   }
 
-  /// Opens the photo-capture screen (panel photo button). If the bodycam is live
-  /// in Agora, first asks whether to shoot with the bodycam or the phone; the
-  /// bodycam photo is a frame grabbed from its livestream onto this phone. With
-  /// no bodycam, goes straight to the phone camera.
+  /// Panel photo button: opens the phone's NATIVE camera app (via image_picker),
+  /// then saves the captured photo locally into the "falcon_pictures" folder.
+  /// No Agora/bodycam involvement — the native camera handles orientation, so
+  /// the picture isn't rotated/inverted like the Agora snapshot was.
   Future<void> openPhotoCapture() async {
-    final ok = await ensureAgoraStarted();
-    if (!ok) {
-      debugPrint('openPhotoCapture: Agora not available');
-      return;
+    try {
+      // CAMERA is declared in the manifest (Agora), so image_picker requires it
+      // granted at runtime before launching the camera app.
+      final cam = await Permission.camera.request();
+      if (!cam.isGranted) {
+        _safeSnackBar(
+          'Photo',
+          'Camera permission denied',
+          backgroundColor: Colors.red.shade900,
+          colorText: Colors.white,
+        );
+        return;
+      }
+
+      final img_picker.XFile? shot = await img_picker.ImagePicker().pickImage(
+        source: img_picker.ImageSource.camera,
+        preferredCameraDevice: img_picker.CameraDevice.rear,
+      );
+      if (shot == null) return; // user backed out of the camera
+
+      final store = Get.isRegistered<PhotoStorageService>()
+          ? Get.find<PhotoStorageService>()
+          : Get.put(PhotoStorageService(), permanent: true);
+      final saved = await store.importFile(File(shot.path));
+
+      _safeSnackBar(
+        'Photo',
+        'Saved to falcon_pictures',
+        backgroundColor: const Color(0xFF1B5E20),
+        colorText: Colors.white,
+      );
+      debugPrint('openPhotoCapture: saved ${saved.path}');
+    } catch (error, stackTrace) {
+      debugPrint('openPhotoCapture: $error\n$stackTrace');
+      _safeSnackBar(
+        'Photo',
+        'Could not capture photo',
+        backgroundColor: Colors.red.shade900,
+        colorText: Colors.white,
+      );
     }
-    final service = _ensureCallService();
-    int? sourceUid;
-    if (service?.bodyCamVideoActive ?? false) {
-      final useBodycam = await showPhotoSourceDialog();
-      if (useBodycam == null) return; // cancelled
-      sourceUid = useBodycam ? CallService.bodyCamAgoraUid : null;
-    }
-    await Get.to<void>(
-      () => PhotoCaptureView(sourceUid: sourceUid),
-      transition: Transition.rightToLeft,
-      duration: const Duration(milliseconds: 280),
-    );
   }
 
   Future<void> _setupAgentLayers(MapboxMap map) async {

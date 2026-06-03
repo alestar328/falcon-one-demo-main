@@ -27,6 +27,11 @@ class BodyCamStreamWidget extends StatelessWidget {
       if (uid == null) {
         return _placeholder('No video signal');
       }
+      // Bodycam stream now arrives 90° to the RIGHT on both the phone and the
+      // Agora console (same raw sensor orientation). Rotate the phone view 90°
+      // to the LEFT to stand it upright. RotatedBox turns CLOCKWISE, so 90° CCW
+      // (left) = quarterTurns: 3. If it ever comes out mirrored/over-rotated,
+      // flip this to 1. (The Agora web console can't be rotated from here.)
       return ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
         child: RotatedBox(

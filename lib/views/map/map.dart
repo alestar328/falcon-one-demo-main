@@ -253,7 +253,11 @@ class MapView extends GetView<MapController> {
                                   : null,
                             )),
                           ),
-                          // [3] Bodycam connect / recording state.
+                          // [3] Bodycam Bluetooth CONNECT/DISCONNECT toggle.
+                          // This button only manages the BT link; livestream
+                          // (emergency) and normal recording are driven by the
+                          // bodycam's own physical buttons. Icon shows the link
+                          // state (red record dot while it's recording).
                           Expanded(
                             child: PanelButton(
                               iconData: recording
@@ -264,7 +268,7 @@ class MapView extends GetView<MapController> {
                                           ? Icons.sync
                                           : Icons.videocam_off,
                               iconColor: recording ? Colors.red : null,
-                              onTap: controller.toggleBodyCam,
+                              onTap: controller.toggleBodyCamConnection,
                             ),
                           ),
                         ],

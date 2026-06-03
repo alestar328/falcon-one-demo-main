@@ -3,12 +3,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// Manages the app's own dedicated photo folder (incident photos taken from the
-/// phone camera or captured from the bodycam livestream). Durable across app
-/// launches and fully app-managed — no system-gallery permissions needed, and
-/// the app can list/delete its files freely.
+/// Manages the app's own dedicated photo folder ("falcon_pictures") for photos
+/// taken with the phone's native camera. Durable across app launches and fully
+/// app-managed — no system-gallery permissions needed, and the app can
+/// list/delete its files freely.
 class PhotoStorageService {
-  static const String _folderName = 'incident_photos';
+  static const String _folderName = 'falcon_pictures';
 
   Directory? _cachedDir;
 
@@ -31,6 +31,14 @@ class PhotoStorageService {
     final dir = await _dir();
     final ts = DateTime.now().millisecondsSinceEpoch;
     return '${dir.path}/photo_$ts.jpg';
+  }
+
+  /// Copies a just-captured photo (e.g. the temp file from the native camera)
+  /// into the falcon_pictures folder under a fresh timestamped name, and returns
+  /// the saved file.
+  Future<File> importFile(File source) async {
+    final dest = await newPhotoPath();
+    return source.copy(dest);
   }
 
   /// All stored photos, newest first.

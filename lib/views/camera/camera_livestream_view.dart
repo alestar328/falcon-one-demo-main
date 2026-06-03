@@ -285,7 +285,9 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
     });
   }
 
-  /// Badge shown in watch mode indicating we're viewing a remote source.
+  /// Badge shown in watch mode. The bodycam is normal RECORDING (not a
+  /// livestream), so it reads "REC · BODYCAM"; another agent's feed (SOS) is a
+  /// live broadcast, so it reads "LIVE · OFFICER".
   Widget _buildWatchBadge() {
     final isBodycam = widget.watchUid == CallService.bodyCamAgoraUid;
     return Positioned(
@@ -301,10 +303,11 @@ class _CameraLivestreamViewState extends State<CameraLivestreamView> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.circle, color: Colors.white, size: 8),
+              Icon(isBodycam ? Icons.fiber_manual_record : Icons.circle,
+                  color: Colors.white, size: isBodycam ? 10 : 8),
               const SizedBox(width: 4),
               Text(
-                isBodycam ? 'LIVE · BODYCAM' : 'LIVE · OFFICER',
+                isBodycam ? 'REC · BODYCAM' : 'LIVE · OFFICER',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 11,
